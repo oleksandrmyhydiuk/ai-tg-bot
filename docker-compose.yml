@@ -1,0 +1,13 @@
+services:
+  bot:
+    build: .
+    container_name: telegram_hybrid_bot
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./data:/app/data
+    deploy:
+      resources:
+        limits:
+          cpus: '1.00'
+          memory: 512M
