@@ -1,0 +1,25 @@
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+exclude = [
+    ".git",
+    ".venv",
+    "venv",
+    "__pycache__",
+    "data",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B", "UP"]
+ignore = [
+    "E501",  # Allow long lines for localized Ukrainian prompts/messages
+    "B008",  # Standard function calls in default arguments if needed
+]
+
+[tool.ruff.lint.per-file-ignores]
+"app/main.py" = ["E402"]  # sys.path bootstrap before app imports
+"tests/*" = ["E402"]
+
+[tool.bandit]
+exclude_dirs = ["tests", "venv", ".venv"]
+skips = ["B101", "B110", "B112"]  # Allow assert statements and explicit best-effort fallbacks
