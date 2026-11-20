@@ -134,8 +134,9 @@ def strip_markdown(text: str) -> str:
 
 
 class GeminiService:
-    def __init__(self) -> None:
-        self.client = genai.Client(api_key=settings.gemini_api_key)
+    def __init__(self, api_key: str | None = None) -> None:
+        key = api_key or settings.gemini_api_key or "DUMMY_KEY_FOR_INIT"
+        self.client = genai.Client(api_key=key)
         self._unavailable_models: dict[str, float] = {}
 
     def _is_model_unavailable(self, model_name: str) -> bool:

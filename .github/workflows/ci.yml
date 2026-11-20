@@ -82,6 +82,8 @@ jobs:
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     permissions:
       contents: write
+      pages: write
+      id-token: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -99,10 +101,24 @@ jobs:
           pip install -r requirements.txt mkdocs-material "mkdocstrings[python]"
 
       - name: Build documentation in strict mode
+        env:
+          BOT_TOKEN: "123456:DUMMY_FOR_DOCS"
+          GEMINI_API_KEY: "DUMMY_KEY_FOR_DOCS"
         run: mkdocs build --strict
 
-      - name: Deploy documentation to GitHub Pages
+      - name: Deploy documentation to gh-pages branch
         uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./site
+          force_orphan: true
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./site
+
+      - name: Deploy to GitHub Pages (Actions mode)
+        id: deployment
+        continue-on-error: true
+        uses: actions/deploy-pages@v4

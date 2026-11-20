@@ -5,8 +5,8 @@ try:
     from pydantic_settings import BaseSettings, SettingsConfigDict
 
     class Settings(BaseSettings):
-        bot_token: str
-        gemini_api_key: str
+        bot_token: str = ""
+        gemini_api_key: str = ""
         gemini_ask_model: str = "gemini-3.8-flash"
         gemini_summary_model: str = "gemma-4-26b-a4b-it"
         gemini_enable_search: bool = True

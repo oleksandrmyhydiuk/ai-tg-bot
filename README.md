@@ -1,14 +1,11 @@
 # AI Telegram Group & DM Assistant (Gemini API)
 
 [![CI](https://github.com/oleksandrmyhydiuk/ai-tg-bot/actions/workflows/ci.yml/badge.svg)](https://github.com/oleksandrmyhydiuk/ai-tg-bot/actions/workflows/ci.yml)
-[![Docs](https://img.shields.io/badge/Docs-GitHub%20Pages-blue.svg)](https://oleksandrmyhydiuk.github.io/ai-tg-bot/)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%20%7C%203.12-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Security Scanned](https://img.shields.io/badge/Security-Bandit%20%7C%20pip--audit-green)](https://github.com/PyCQA/bandit)
 
 A lightweight, asynchronous Telegram bot for group chats and direct messages powered exclusively by the **Google Gemini API (Free Tier)**. It provides time-windowed chat summaries with anti-hallucination verification, web-grounded Q&A via Google Search, image analysis (Vision), and automated hourly digest caching backed by SQLite.
-
-📖 **Full Documentation**: [https://oleksandrmyhydiuk.github.io/ai-tg-bot/](https://oleksandrmyhydiuk.github.io/ai-tg-bot/)
 
 ---
 
