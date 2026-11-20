@@ -14,7 +14,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
 def utc_now() -> datetime:
-    """Повертає поточний час в UTC без tzinfo для коректного порівняння в SQLite."""
+    """Returns current UTC datetime without tzinfo for consistent comparison in SQLite."""
     return datetime.now(UTC).replace(tzinfo=None)
 
 

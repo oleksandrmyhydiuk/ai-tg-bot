@@ -27,7 +27,7 @@ _SKIPPED_COMMANDS = ("/clear", "/summary", "/stats", "/start", "/help")
 
 
 def _is_service_message(message: Message) -> bool:
-    """Перевіряє, чи є повідомлення сервісною подією Telegram."""
+    """Checks if message is a Telegram service event."""
     service_attrs = (
         "new_chat_members",
         "left_chat_member",
@@ -55,8 +55,8 @@ def _is_service_message(message: Message) -> bool:
 
 def _extract_media_info(message: Message) -> tuple[str | None, str]:
     """
-    Визначає короткий тип медіа (media_type) та резервний текстовий опис (fallback_label),
-    якщо у повідомленні немає текстового підпису.
+    Determines concise media type (media_type) and fallback textual label (fallback_label)
+    if the message contains no text caption.
     """
     if getattr(message, "photo", None):
         return "photo", "[фото]"
@@ -88,7 +88,7 @@ def _extract_media_info(message: Message) -> tuple[str | None, str]:
 
 
 def _extract_forward_origin(message: Message) -> str | None:
-    """Витягує стислий опис джерела пересланого повідомлення (до 160 символів)."""
+    """Extracts concise description of forwarded message origin (up to 160 characters)."""
     fo = getattr(message, "forward_origin", None)
     if fo is not None:
         fo_type = getattr(fo, "type", "")
@@ -126,8 +126,7 @@ def _extract_forward_origin(message: Message) -> str | None:
 
 def _is_forum_topic_root_reply(message: Message, reply: Message) -> bool:
     """
-    Визначає, чи є reply_to_message технічним посиланням Telegram на корінь гілки форуму (Topic),
-    а не справжньою відповіддю користувача на конкретне повідомлення.
+    Checks if reply_to_message is a technical link to forum topic root rather than a user reply.
     """
     if getattr(reply, "forum_topic_created", None) is not None:
         return True
@@ -150,8 +149,8 @@ def _extract_reply_metadata(
     explicit_reply: Message | None = None,
 ) -> tuple[int | None, int | None, str | None, str | None]:
     """
-    Повертає (reply_to_message_id, reply_to_user_id, reply_to_author, reply_to_snippet).
-    Для кореневих повідомлень форумного топіку повертає (None, None, None, None).
+    Returns (reply_to_message_id, reply_to_user_id, reply_to_author, reply_to_snippet).
+    For topic root messages, returns (None, None, None, None).
     """
     reply = explicit_reply or getattr(message, "reply_to_message", None)
     if reply is None:
@@ -195,14 +194,14 @@ async def _upsert_message_record(
     custom_text: str | None = None,
     is_edit: bool = False,
 ) -> None:
-    """Внутрішня функція збереження або оновлення повідомлення в ChatLog."""
+    """Internal helper function to persist or update a message record in ChatLog."""
     if _is_service_message(message):
         return
 
     sender_chat = getattr(message, "sender_chat", None)
     from_user = getattr(message, "from_user", None)
 
-    # Ігноруємо звичайних зовнішніх ботів, але пропускаємо анонімних адмінів та пости прив'язаних каналів (де є sender_chat)
+    # Ignore standard external bots, but allow anonymous admins and connected channel posts (where sender_chat is present)
     if sender_chat is None:
         if from_user is None or getattr(from_user, "is_bot", False):
             return
@@ -236,7 +235,7 @@ async def _upsert_message_record(
             or getattr(sender_chat, "username", None)
             or "Анонімний адмін"
         )[:128]
-        # Якщо це не системний бот GroupAnonymousBot/Channel_Bot, а реальний користувач
+        # If not system anonymous bot, but real user
         if from_user is not None and not getattr(from_user, "is_bot", False):
             user_id = from_user.id
             username = from_user.username
@@ -308,7 +307,7 @@ async def _upsert_message_record(
                 "sender_name": sender_name,
             }
             if is_edit:
-                # При редагуванні повідомлення зберігаємо edited_at і НЕ скидаємо is_processed!
+                # When editing message, save edited_at and DO NOT reset is_processed!
                 update_set["edited_at"] = now_utc
 
             log_stmt = sqlite_upsert(ChatLog).values(**insert_values).on_conflict_do_update(
@@ -319,7 +318,7 @@ async def _upsert_message_record(
             await session.execute(log_stmt)
             await session.commit()
     except Exception as e:
-        logger.exception("Помилка збереження повідомлення в БД (chat_id=%s): %s", message.chat.id, e)
+        logger.exception("Failed to save message to DB (chat_id=%s): %s", message.chat.id, e)
 
 
 @router.message(SUPPORTED_CONTENT_FILTER)
@@ -328,13 +327,13 @@ async def log_text_message(
     custom_text: str | None = None,
     is_edit: bool = False,
 ) -> None:
-    """Асинхронно зберігає повідомлення, медіа, реплаї, цитати та метадані учасників чату в БД."""
+    """Asynchronously saves message text, media fallback, replies, quotes, and metadata to DB."""
     await _upsert_message_record(message, custom_text=custom_text, is_edit=is_edit)
 
 
 @router.edited_message(SUPPORTED_CONTENT_FILTER)
 async def log_edited_message(message: Message) -> None:
-    """Оновлює текст і метадані відредагованого повідомлення без скидання прапорця is_processed."""
+    """Updates text and metadata of edited message without resetting is_processed flag."""
     await _upsert_message_record(message, is_edit=True)
 
 
@@ -344,8 +343,8 @@ async def log_bot_message(
     text_override: str | None = None,
 ) -> None:
     """
-    Зберігає власну відповідь бота в ChatLog (з is_bot_message=True та sender_name='Бот'),
-    щоб подальші реплаї користувачів на відповідь бота та /summary мали повний контекст.
+    Saves bot's own response into ChatLog (with is_bot_message=True and sender_name='Bot')
+    so subsequent user replies and /summary have full conversational context.
     """
     try:
         if bot_message is None or getattr(bot_message, "chat", None) is None:
@@ -432,7 +431,7 @@ async def log_bot_message(
             await session.commit()
     except Exception as e:
         logger.warning(
-            "Не вдалося зберегти відповідь бота в ChatLog (chat_id=%s): %s",
+            "Failed to save bot response to ChatLog (chat_id=%s): %s",
             getattr(getattr(bot_message, "chat", None), "id", None),
             e,
         )

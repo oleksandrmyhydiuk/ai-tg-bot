@@ -27,12 +27,12 @@ try:
 except Exception:
     KYIV_TZ = timezone(timedelta(hours=2))
 
-UNAVAILABLE_MODEL_TTL_SECONDS = 3600.0  # 1 година TTL для тимчасово недоступних (404) моделей
+UNAVAILABLE_MODEL_TTL_SECONDS = 3600.0  # 1 hour TTL for temporarily unavailable (404) models
 MAX_DIGEST_BATCHES_PER_RUN = 3
 DIGEST_BATCH_SIZE = 200
 
-# Моделі для пошуку в інтернеті, пояснень та відповідей на пінги (@bot, /ask):
-# основна gemini-3.8-flash + фолбек на Gemma 4 (31B/26B) та Gemini 3 Flash/Lite
+# Models for web search, explanations, and answers to pings (@bot, /ask):
+# primary gemini-3.8-flash + fallback on Gemma 4 (31B/26B) and Gemini 3 Flash/Lite
 ASK_FALLBACK_MODELS = [
     "gemini-3.8-flash",
     "gemma-4-31b-it",
@@ -42,7 +42,7 @@ ASK_FALLBACK_MODELS = [
     "gemini-3.5-flash-lite",
 ]
 
-# Моделі з високими безкоштовними лімітами для генерації звітів (/summary) та погодинних дайджестів
+# Models with high free-tier limits for summary generation (/summary) and hourly background digests
 SUMMARY_FALLBACK_MODELS = [
     "gemma-4-26b-a4b-it",
     "gemma-4-31b-it",
@@ -117,7 +117,7 @@ SUMMARY_SELF_CHECK_SYSTEM_INSTRUCTION = (
 
 
 def strip_markdown(text: str) -> str:
-    """Видаляє символи Markdown-форматування з тексту для чистого відображення в Telegram."""
+    """Strips Markdown formatting characters from text for clean Telegram display."""
     if not text:
         return ""
     text = re.sub(r"```[a-zA-Z0-9_-]*\n?", "", text)
@@ -169,8 +169,8 @@ class GeminiService:
         last_error: Exception | None = None
 
         for model_name in model_chain:
-            # Лише старі моделі Gemma 3 не підтримували system_instruction та google_search;
-            # Gemma 4 підтримує і system_instruction, і google_search, і thinking_config.
+            # Only legacy Gemma 3 models lacked system_instruction and google_search;
+            # Gemma 4 supports system_instruction, google_search, and thinking_config.
             is_legacy_gemma = model_name.startswith("gemma-3-")
             search_attempts = [True, False] if (use_search and not is_legacy_gemma) else [False]
 
@@ -210,8 +210,8 @@ class GeminiService:
                         )
                     except Exception as inner_exc:
                         inner_err_str = str(inner_exc)
-                        # Якщо конкретна модель або версія API відхилила thinking_config чи response_schema з 400,
-                        # повторюємо один раз без цих опцій перед переходом до наступної моделі.
+                        # If model or API version rejected thinking_config or response_schema with 400,
+                        # retry once without those options before falling back to the next model.
                         if (
                             ("400" in inner_err_str or "INVALID_ARGUMENT" in inner_err_str)
                             and any(
@@ -220,7 +220,7 @@ class GeminiService:
                             )
                         ):
                             logger.info(
-                                "Модель %s відхилила розширені параметри конфігурації (%s), повтор без них.",
+                                "Model %s rejected advanced configuration options (%s), retrying without them.",
                                 model_name,
                                 inner_err_str,
                             )
@@ -243,7 +243,7 @@ class GeminiService:
                     if getattr(response, "candidates", None):
                         finish_reason = getattr(response.candidates[0], "finish_reason", None)
                     logger.warning(
-                        "Модель %s (search=%s) повернула порожню відповідь (finish_reason=%s).",
+                        "Model %s (search=%s) returned empty response (finish_reason=%s).",
                         model_name,
                         with_search,
                         finish_reason,
@@ -252,7 +252,7 @@ class GeminiService:
                     last_error = e
                     err_str = str(e)
                     logger.warning(
-                        "Модель %s (search=%s) повернула помилку: %s",
+                        "Model %s (search=%s) returned error: %s",
                         model_name,
                         with_search,
                         err_str,
@@ -261,14 +261,14 @@ class GeminiService:
                         self._unavailable_models[model_name] = time.monotonic()
                         break
                     if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
-                        # Не повторюємо запит до тієї ж моделі без search, якщо вичерпано квоту (429)!
+                        # Do not retry the same model without search if quota is exhausted (429)!
                         break
                     if not with_search:
                         break
 
-        raise RuntimeError(str(last_error) if last_error else "Невідома помилка Gemini API")
+        raise RuntimeError(str(last_error) if last_error else "Unknown Gemini API error")
 
-    # Зворотна сумісність із попереднім ім'ям методу
+    # Backward compatibility with previous method name
     _generate_with_chain = _generate_with_fallback
 
     async def ask(
@@ -278,8 +278,8 @@ class GeminiService:
         mime_type: str = "image/jpeg",
     ) -> str:
         """
-        Виконує пошуковий або пояснювальний запит через новішу модель Gemini / Gemma 4
-        (з підтримкою Google Search та аналізу зображень Vision).
+        Executes search or explanation query via newer Gemini / Gemma 4 model
+        (with Google Search and Gemini Vision image understanding).
         """
         system_instruction = (
             "Ти — розумний пошуковий та аналітичний ШІ-асистент у Telegram. "
@@ -311,7 +311,7 @@ class GeminiService:
                 use_search=use_search,
             )
         except Exception as e:
-            logger.error("Усі спроби Gemini API (ask) завершились помилкою: %s", e)
+            logger.error("All Gemini API attempts (ask) failed: %s", e)
             if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
                 return (
                     "⚠️ Тимчасово вичерпано ліміт безкоштовних запитів Gemini API (429 RESOURCE_EXHAUSTED).\n"
@@ -325,7 +325,7 @@ class GeminiService:
         draft: ChatSummarySchema,
         model_chain: list[str],
     ) -> ChatSummarySchema:
-        """Опціональний другий прохід (Pass-2 Self-Check) для додаткової перевірки фактів."""
+        """Optional second pass (Pass-2 Self-Check) for additional fact verification."""
         prompt = (
             f"Чернетка JSON-звіту для перевірки:\n{draft.model_dump_json(indent=2)}\n\n"
             f"Сирий транскрипт чату:\n{bundle.transcript_text}"
@@ -350,7 +350,7 @@ class GeminiService:
                     bundle.valid_speakers,
                 )
         except Exception as e:
-            logger.warning("Pass-2 self-check завершився помилкою, використовуємо результат Pass-1: %s", e)
+            logger.warning("Pass-2 self-check failed, using Pass-1 result: %s", e)
         return draft
 
     async def generate_verified_summary(
@@ -362,8 +362,8 @@ class GeminiService:
         header_note: str | None = None,
     ) -> tuple[str, ChatSummarySchema | None]:
         """
-        Генерує структурований JSON-підсумок за транскриптом, валідує всі message_id та учасників
-        через verify_and_prune_summary і рендерить фінальний текст українською мовою.
+        Generates structured JSON summary from transcript, validates all message_ids and participants
+        via verify_and_prune_summary, and renders final clean text.
         """
         if bundle.single_digest_fast_path and bundle.message_count == 0 and bundle.digest_count == 1:
             fast_text = bundle.single_digest_fast_path
@@ -386,7 +386,7 @@ class GeminiService:
 
         parsed = parse_summary_json(raw_json_text)
         if parsed is None:
-            logger.warning("Модель повернула невалідний JSON під час саммарі, повторна спроба без response_schema.")
+            logger.warning("Model returned invalid JSON during summary, retrying without response_schema.")
             raw_json_retry = await self._generate_with_fallback(
                 model_chain=model_chain,
                 contents=(
@@ -403,7 +403,7 @@ class GeminiService:
             )
             parsed = parse_summary_json(raw_json_retry)
             if parsed is None:
-                raise ValueError("Не вдалося розпарсити JSON-відповідь моделі для підсумку чату.")
+                raise ValueError("Failed to parse model JSON response for chat summary.")
 
         verified = verify_and_prune_summary(
             parsed,
@@ -430,7 +430,7 @@ class GeminiService:
         messages_input: SummaryContextBundle | str,
         chat_id: int | None = None,
     ) -> str | None:
-        """Стискає пачку повідомлень за годину в короткий фактичний дайджест для БД."""
+        """Compresses batch of hourly messages into a concise factual digest for DB storage."""
         if isinstance(messages_input, SummaryContextBundle):
             try:
                 rendered, _ = await self.generate_verified_summary(
@@ -440,7 +440,7 @@ class GeminiService:
                 )
                 return rendered
             except Exception as e:
-                logger.error("Помилка створення верифікованого щогодинного дайджесту: %s", e)
+                logger.error("Failed to generate verified hourly digest: %s", e)
                 return None
 
         system_instruction = (
@@ -460,7 +460,7 @@ class GeminiService:
                 minimal_thinking=True,
             )
         except Exception as e:
-            logger.error("Помилка створення щогодинного дайджесту: %s", e)
+            logger.error("Failed to generate hourly digest: %s", e)
             return None
 
     async def summarize_chat_period(
@@ -474,8 +474,8 @@ class GeminiService:
         chat_username: str | None = None,
     ) -> str:
         """
-        Формує підсумок чату за вказаний період часу.
-        Якщо передано SummaryContextBundle — використовує верифікований JSON-пайплайн.
+        Generates chat summary for specified period of time.
+        If SummaryContextBundle is provided, uses verified JSON pipeline.
         """
         if bundle is not None:
             header_note = None
@@ -494,7 +494,7 @@ class GeminiService:
                 )
                 return f"📋 Підсумок чату за останні {hours_label} ({total_items_desc}):\n\n{rendered}"
             except Exception as e:
-                logger.error("Помилка генерації верифікованого саммарі: %s", e)
+                logger.error("Error generating verified summary: %s", e)
                 fallback_body = "\n".join(bundle.raw_fallback_lines)[:3500]
                 return (
                     f"⚠️ Не вдалося сформувати ШІ-звіт через ліміт або помилку API. "
@@ -536,7 +536,7 @@ class GeminiService:
             )
             return f"📋 Підсумок чату за останні {hours_label} ({total_items_desc}):\n\n{summary}"
         except Exception as e:
-            logger.error("Помилка генерації саммарі через Gemini API: %s", e)
+            logger.error("Error generating summary via Gemini API: %s", e)
             fallback_parts = []
             if hourly_digests:
                 fallback_parts.append("\n\n".join(hourly_digests))
@@ -553,7 +553,7 @@ gemini_service = GeminiService()
 
 
 def format_kyiv_time(utc_dt) -> str:
-    """Конвертує UTC datetime із БД у часовий пояс Europe/Kyiv (з урахуванням літнього/зимового часу)."""
+    """Converts UTC datetime from DB to Europe/Kyiv timezone (accounting for daylight saving time)."""
     if utc_dt is None:
         return "--:--"
     if utc_dt.tzinfo is None:
@@ -565,14 +565,14 @@ def format_kyiv_time(utc_dt) -> str:
 
 async def process_hourly_digest_for_chat(chat_id: int) -> bool:
     """
-    Формує погодинні дайджести із накопичених необроблених повідомлень чату
-    у хронологічному порядку (до 3 пачок по 200 повідомлень за один запуск),
-    не тримаючи транзакцію БД відкритою під час мережевого виклику LLM.
+    Generates hourly digests from accumulated unprocessed chat messages
+    in chronological order (up to 3 batches of 200 messages per execution),
+    keeping DB transactions closed during external LLM network calls.
     """
     any_processed = False
 
     for _ in range(MAX_DIGEST_BATCHES_PER_RUN):
-        # Крок 1: Відкриваємо сесію лише для швидкого читання пачки та її батьківських реплаїв
+        # Step 1: Open session briefly to read batch and orphan parent replies
         async with async_session_factory() as session:
             stmt = (
                 select(ChatLog, User)
@@ -593,7 +593,7 @@ async def process_hourly_digest_for_chat(chat_id: int) -> bool:
             p_start = bundle.period_start
             p_end = bundle.period_end
 
-        # Крок 2: Виконуємо виклик LLM поза сесією БД (щоб не блокувати SQLite)
+        # Step 2: Execute LLM call outside DB session to avoid locking SQLite
         verified: ChatSummarySchema | None = None
         if len(rows) <= 3:
             digest_text = "\n".join(f"• {line}" for line in bundle.raw_fallback_lines)
@@ -606,7 +606,7 @@ async def process_hourly_digest_for_chat(chat_id: int) -> bool:
                 )
             except Exception as e:
                 logger.error(
-                    "Помилка створення щогодинного дайджесту для чату %s: %s",
+                    "Failed to generate hourly digest for chat %s: %s",
                     chat_id,
                     e,
                 )
@@ -615,7 +615,7 @@ async def process_hourly_digest_for_chat(chat_id: int) -> bool:
             if not digest_text:
                 break
 
-        # Крок 3: Відкриваємо нову сесію, перевіряємо чи не виконав адмін /clear поки працював LLM
+        # Step 3: Open new session, verify chat wasn't /cleared while LLM was running
         async with async_session_factory() as session:
             existing_count = (
                 await session.execute(
@@ -628,7 +628,7 @@ async def process_hourly_digest_for_chat(chat_id: int) -> bool:
 
             if existing_count == 0:
                 logger.info(
-                    "Повідомлення чату %s були видалені (/clear) під час генерації дайджесту — збереження скасовано.",
+                    "Messages in chat %s were deleted (/clear) during digest generation - save aborted.",
                     chat_id,
                 )
                 break
@@ -652,7 +652,7 @@ async def process_hourly_digest_for_chat(chat_id: int) -> bool:
             await session.commit()
             any_processed = True
             logger.info(
-                "Створено щогодинний дайджест для чату %s (%d повідомлень).",
+                "Generated hourly digest for chat %s (%d messages).",
                 chat_id,
                 existing_count,
             )
@@ -665,9 +665,9 @@ async def process_hourly_digest_for_chat(chat_id: int) -> bool:
 
 async def run_hourly_digest_and_cleanup_job() -> None:
     """
-    Фонова щогодинна задача:
-    1) Створює погодинні дайджести з необроблених повідомлень для кожного чату ізольовано.
-    2) Видаляє старі повідомлення, дайджести (старші за RETENTION_DAYS) та осиротілі записи User.
+    Background hourly task:
+    1) Generates hourly digests from unprocessed messages for each chat in isolation.
+    2) Prunes outdated messages, digests (older than RETENTION_DAYS), and orphaned User records.
     """
     try:
         async with async_session_factory() as session:
@@ -683,12 +683,12 @@ async def run_hourly_digest_and_cleanup_job() -> None:
                 await process_hourly_digest_for_chat(cid)
             except Exception as chat_err:
                 logger.exception(
-                    "Помилка створення погодинного дайджесту для чату %s: %s",
+                    "Failed to generate hourly digest for chat %s: %s",
                     cid,
                     chat_err,
                 )
 
-        # Очищення старих записів (за замовчуванням старших за 7 діб) та осиротілих користувачів
+        # Cleanup outdated records (default older than 7 days) and orphaned users
         cutoff_retention = utc_now() - timedelta(days=settings.retention_days)
         async with async_session_factory() as session:
             await session.execute(delete(ChatLog).where(ChatLog.timestamp < cutoff_retention))
@@ -701,4 +701,4 @@ async def run_hourly_digest_and_cleanup_job() -> None:
             await session.execute(delete(User).where(User.user_id.not_in(active_users_subq)))
             await session.commit()
     except Exception as e:
-        logger.exception("Помилка у фоновій щогодинній задачі дайджестів/очищення: %s", e)
+        logger.exception("Error in background hourly digest/cleanup job: %s", e)

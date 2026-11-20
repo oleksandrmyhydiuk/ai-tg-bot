@@ -22,15 +22,15 @@ logger = logging.getLogger(__name__)
 router = Router(name="commands_router")
 MAX_TELEGRAM_TEXT_LEN = 4000
 MAX_TG_LENGTH = MAX_TELEGRAM_TEXT_LEN
-MAX_PHOTO_SIZE_BYTES = 10 * 1024 * 1024  # 10 МБ
+MAX_PHOTO_SIZE_BYTES = 10 * 1024 * 1024  # 10 MB
 DEFAULT_SUMMARY_HOURS = 6.0
-MAX_SUMMARY_HOURS = 168.0  # До 7 діб
-USER_COOLDOWN_SECONDS = 8.0  # Захист безкоштовної квоти Gemini від спаму
+MAX_SUMMARY_HOURS = 168.0  # Up to 7 days
+USER_COOLDOWN_SECONDS = 8.0  # Gemini free tier rate limit protection against spam
 
 _cached_bot_username: str | None = None
 _user_last_request: dict[int, float] = {}
 
-# Регулярний вираз для виклику саммарі через пінг бота: "@bot суммарі 4", "@bot саммарі 12", "@bot summary 4"
+# Regex for invocation via bot mention: "@bot summary 4", "@bot summary 12"
 MENTION_SUMMARY_REGEX = re.compile(
     r"^\s*(?:сум+арі|сам+арі|summary)(?:\s+(\d+(?:[.,]\d+)?))?\s*$",
     re.IGNORECASE,
@@ -39,8 +39,8 @@ MENTION_SUMMARY_REGEX = re.compile(
 
 def _check_rate_limit(user_id: int | None) -> float:
     """
-    Перевіряє ліміт частоти запитів для користувача.
-    Повертає 0.0, якщо запит дозволено, або скільки секунд залишилося зачекати.
+    Checks user request frequency limit.
+    Returns 0.0 if request is permitted, or remaining seconds to wait.
     """
     if user_id is None:
         return 0.0
@@ -50,7 +50,7 @@ def _check_rate_limit(user_id: int | None) -> float:
     if elapsed < USER_COOLDOWN_SECONDS:
         return USER_COOLDOWN_SECONDS - elapsed
     _user_last_request[user_id] = now
-    # Періодичне очищення словника, щоб не ріс у пам'яті
+    # Periodic cleanup of cache to prevent memory growth
     if len(_user_last_request) > 1000:
         cutoff = now - 60.0
         for uid in [k for k, v in _user_last_request.items() if v < cutoff]:
@@ -59,22 +59,22 @@ def _check_rate_limit(user_id: int | None) -> float:
 
 
 async def _get_bot_username(bot: Bot) -> str:
-    """Повертає та кешує username бота, щоб не робити зайвих запитів get_me()."""
+    """Returns and caches bot username to avoid redundant get_me() requests."""
     global _cached_bot_username
     if _cached_bot_username is None:
         try:
             bot_info = await bot.get_me()
             _cached_bot_username = bot_info.username or ""
         except Exception as e:
-            logger.warning("Не вдалося отримати get_me(): %s", e)
+            logger.warning("Failed to fetch get_me(): %s", e)
             return ""
     return _cached_bot_username
 
 
 def _split_text_chunks(text: str, max_len: int = MAX_TELEGRAM_TEXT_LEN) -> list[str]:
     """
-    Розбиває довгий текст на частини <= max_len символів по межах абзаців або рядків,
-    щоб не обрізати змістовні звіти бота.
+    Splits long text into chunks <= max_len characters along paragraph or line boundaries,
+    preventing bot report truncation.
     """
     if not text:
         return ["..."]
@@ -89,7 +89,7 @@ def _split_text_chunks(text: str, max_len: int = MAX_TELEGRAM_TEXT_LEN) -> list[
             chunks.append(remaining)
             break
 
-        # Шукаємо розрив абзацу, потім рядка, потім пробіл у межах max_len
+        # Look for paragraph break, then newline, then space within max_len
         split_at = remaining.rfind("\n\n", 0, max_len)
         if split_at < max_len // 3:
             split_at = remaining.rfind("\n", 0, max_len)
@@ -108,8 +108,8 @@ def _split_text_chunks(text: str, max_len: int = MAX_TELEGRAM_TEXT_LEN) -> list[
 
 async def _safe_answer_text(message: Message, text: str) -> Message:
     """
-    Безпечно відповідає на повідомлення (якщо reply недоступний — використовує answer).
-    Якщо текст перевищує MAX_TELEGRAM_TEXT_LEN, розбиває його на декілька повідомлень.
+    Safely responds to message (falling back to answer if reply is unavailable).
+    If text exceeds MAX_TELEGRAM_TEXT_LEN, splits into multiple sequential messages.
     """
     clean_text = strip_markdown(text) or "..."
     chunks = _split_text_chunks(clean_text, MAX_TELEGRAM_TEXT_LEN)
@@ -123,7 +123,7 @@ async def _safe_answer_text(message: Message, text: str) -> Message:
         try:
             await message.answer(extra_chunk)
         except (TelegramBadRequest, Exception) as e:
-            logger.warning("Не вдалося надіслати додаткову частину повідомлення: %s", e)
+            logger.warning("Failed to send extra message chunk: %s", e)
             break
 
     return first_msg
@@ -134,9 +134,9 @@ _safe_reply = _safe_answer_text
 
 async def _safe_edit_text(target_message: Message, text: str) -> None:
     """
-    Безпечно очищує текст від Markdown та редагує повідомлення.
-    Якщо текст перевищує MAX_TELEGRAM_TEXT_LEN, розбиває його на частини:
-    першу частину редагує у target_message, а наступні надсилає окремими повідомленнями.
+    Safely strips Markdown and edits message.
+    If text exceeds MAX_TELEGRAM_TEXT_LEN, splits into parts:
+    edits target_message with the first chunk and sends remaining parts as new messages.
     """
     clean_text = strip_markdown(text) or "..."
     chunks = _split_text_chunks(clean_text, MAX_TELEGRAM_TEXT_LEN)
@@ -144,23 +144,23 @@ async def _safe_edit_text(target_message: Message, text: str) -> None:
     try:
         await target_message.edit_text(chunks[0])
     except Exception as e:
-        logger.warning("Не вдалося відредагувати повідомлення, надсилаю нове: %s", e)
+        logger.warning("Failed to edit message, sending new message: %s", e)
         try:
             await target_message.answer(chunks[0])
         except (TelegramBadRequest, Exception) as fallback_err:
-            logger.error("Помилка резервного надсилання повідомлення: %s", fallback_err)
+            logger.error("Failed to fallback send message: %s", fallback_err)
             return
 
     for extra_chunk in chunks[1:]:
         try:
             await target_message.answer(extra_chunk)
         except (TelegramBadRequest, Exception) as e:
-            logger.warning("Не вдалося надіслати додаткову частину відповіді: %s", e)
+            logger.warning("Failed to send extra chunk of reply: %s", e)
             break
 
 
 class BotMentionFilter(Filter):
-    """Фільтр, який спрацьовує, якщо саме цього бота пінганули через @username у тексті або підписі до медіа."""
+    """Filter triggered when the bot is pinged via @username in text or media caption."""
 
     async def __call__(self, message: Message, bot: Bot) -> bool:
         raw_text = (message.text or message.caption or "").strip()
@@ -173,7 +173,7 @@ class BotMentionFilter(Filter):
 
 
 def _parse_hours(arg_str: str | None) -> float:
-    """Парсить кількість годин з аргументу команди (наприклад, '4', '0.5', '12h')."""
+    """Parses number of hours from command argument (e.g. '4', '0.5', '12h')."""
     if not arg_str:
         return DEFAULT_SUMMARY_HOURS
     match = re.search(r"(\d+(?:[.,]\d+)?)", arg_str)
@@ -193,7 +193,7 @@ def _format_hours_label(hours: float) -> str:
 
 
 def _build_query_with_reply(raw_query: str, message: Message) -> str:
-    """Формує фінальний запит до Gemini з урахуванням тексту повідомлення, на яке відповіли (Reply)."""
+    """Constructs final Gemini prompt incorporating the text of the replied message (Reply)."""
     replied_text = ""
     if message.reply_to_message:
         replied_text = (
@@ -209,7 +209,7 @@ def _build_query_with_reply(raw_query: str, message: Message) -> str:
 
 
 def _get_target_photo_message(message: Message) -> Message | None:
-    """Повертає повідомлення з фото (поточне або те, на яке зроблено Reply)."""
+    """Returns message containing photo (current message or replied-to message)."""
     if message.photo:
         return message
     if message.reply_to_message and message.reply_to_message.photo:
@@ -218,7 +218,7 @@ def _get_target_photo_message(message: Message) -> Message | None:
 
 
 def _is_photo_too_large(message: Message) -> bool:
-    """Перевіряє, чи перевищує розмір фото ліміт 10 МБ перед завантаженням."""
+    """Checks if photo size exceeds 10 MB limit before downloading."""
     target_msg = _get_target_photo_message(message)
     if not target_msg or not target_msg.photo:
         return False
@@ -228,8 +228,8 @@ def _is_photo_too_large(message: Message) -> bool:
 
 async def _extract_photo_bytes(message: Message, bot: Bot | None = None) -> bytes | None:
     """
-    Витягує байти фото з поточного повідомлення або з повідомлення, на яке відповіли.
-    Відхиляє файли > 10 МБ та безпечно обробляє помилки завантаження.
+    Extracts photo bytes from current or replied-to message.
+    Rejects files > 10 MB and safely handles download exceptions.
     """
     target_msg = _get_target_photo_message(message)
     if not target_msg or not target_msg.photo:
@@ -238,7 +238,7 @@ async def _extract_photo_bytes(message: Message, bot: Bot | None = None) -> byte
     largest_photo = target_msg.photo[-1]
     if largest_photo.file_size and largest_photo.file_size > MAX_PHOTO_SIZE_BYTES:
         logger.warning(
-            "Відхилено завантаження занадто великого фото (%d байт > %d байт).",
+            "Rejected download of oversized photo (%d bytes > %d bytes).",
             largest_photo.file_size,
             MAX_PHOTO_SIZE_BYTES,
         )
@@ -253,18 +253,18 @@ async def _extract_photo_bytes(message: Message, bot: Bot | None = None) -> byte
         await active_bot.download(largest_photo, destination=buffer)
         return buffer.getvalue()
     except Exception as e:
-        logger.warning("Не вдалося завантажити фото з Telegram: %s", e)
+        logger.warning("Failed to download photo from Telegram: %s", e)
         return None
 
 
 async def _log_user_query_safely(message: Message, custom_text: str) -> None:
-    """Безпечно логує запит користувача до бота в історію чату."""
+    """Safely logs user query to chat history."""
     try:
         await log_text_message(message, custom_text=custom_text)
     except TypeError:
         await log_text_message(message)
     except Exception as e:
-        logger.warning("Не вдалося залогувати запит користувача: %s", e)
+        logger.warning("Failed to log user query: %s", e)
 
 
 async def _process_ask_request(
@@ -275,11 +275,11 @@ async def _process_ask_request(
     log_custom_text: str | None = None,
 ) -> None:
     """
-    Єдиний пайплайн обробки ШІ-запиту (/ask, @bot пінг, особисті повідомлення):
-    1) Перевіряє наявність тексту/фото.
-    2) Перевіряє rate-limit ДО завантаження фото.
-    3) Безпечно завантажує фото (до 10 МБ).
-    4) Викликає Gemini/Gemma та логує відповідь бота в ChatLog для контексту чату.
+    Unified AI request processing pipeline (/ask, @bot mention, direct message):
+    1) Checks prompt and photo existence.
+    2) Verifies rate limit BEFORE photo download.
+    3) Safely downloads photo (up to 10 MB).
+    4) Invokes Gemini/Gemma and logs bot response in ChatLog for chat context.
     """
     raw_query = (query or "").strip()
     full_query = _build_query_with_reply(raw_query, message)
@@ -290,7 +290,7 @@ async def _process_ask_request(
             await _safe_reply(message, empty_prompt_hint)
         return
 
-    # Перевіряємо rate-limit ДО завантаження фото та звернення до БД/API
+    # Check rate-limit BEFORE downloading photo and accessing DB/API
     user_id = message.from_user.id if message.from_user else None
     wait_sec = _check_rate_limit(user_id)
     if wait_sec > 0:
@@ -338,8 +338,8 @@ async def _process_ask_request(
 
 async def _execute_summary_for_hours(message: Message, hours: float) -> None:
     """
-    Формує верифікований звіт за останні `hours` годин через build_summary_context
-    із прив'язкою до ID повідомлень, ланцюжків відповідей та посиланнями на джерела.
+    Generates verified summary for last `hours` hours via build_summary_context
+    with message ID citations, reply-chain context, and source links.
     """
     wait_sec = _check_rate_limit(message.from_user.id if message.from_user else None)
     if wait_sec > 0:
@@ -363,7 +363,7 @@ async def _execute_summary_for_hours(message: Message, hours: float) -> None:
                 )
                 total_in_db = (await session.execute(total_stmt)).scalar_one() or 0
     except Exception as e:
-        logger.exception("Помилка читання БД під час /summary: %s", e)
+        logger.exception("Database error during /summary: %s", e)
         await _safe_reply(
             message,
             "⚠️ Виникла помилка при читанні історії повідомлень з бази даних.",
@@ -419,7 +419,7 @@ async def _execute_summary_for_hours(message: Message, hours: float) -> None:
             f"{rendered_summary}"
         )
     except Exception as e:
-        logger.error("Помилка генерації верифікованого саммарі для чату %s: %s", chat_id, e)
+        logger.error("Error generating verified summary for chat %s: %s", chat_id, e)
         fallback_body = "\n".join(bundle.raw_fallback_lines)[:3500]
         report = (
             f"⚠️ Не вдалося об'єднати звіт через ліміт API. "
@@ -431,7 +431,7 @@ async def _execute_summary_for_hours(message: Message, hours: float) -> None:
 
 @router.message(Command("start", "help", ignore_case=True))
 async def cmd_start_or_help(message: Message, bot: Bot) -> None:
-    """Виводить довідку з переліком усіх команд та можливостей бота."""
+    """Displays help message with full list of commands and bot capabilities."""
     bot_username = await _get_bot_username(bot)
     mention_example = f"@{bot_username}" if bot_username else "@bot"
     help_text = (
@@ -455,14 +455,14 @@ async def cmd_start_or_help(message: Message, bot: Bot) -> None:
 
 @router.message(Command("summary", ignore_case=True))
 async def cmd_summary(message: Message, command: CommandObject) -> None:
-    """Генерує звіт за останні N годин (наприклад, /summary 4 або /summary)."""
+    """Generates summary for last N hours (e.g. /summary 4 or /summary)."""
     hours = _parse_hours(command.args)
     await _execute_summary_for_hours(message, hours)
 
 
 @router.message(Command("stats", ignore_case=True))
 async def cmd_stats(message: Message) -> None:
-    """Виводить статистику чату за останні 24 години та за весь час."""
+    """Displays chat statistics for last 24 hours and all time."""
     cutoff_24h = utc_now() - timedelta(hours=24)
 
     try:
@@ -498,7 +498,7 @@ async def cmd_stats(message: Message) -> None:
             )
             top_users = (await session.execute(top_users_stmt)).all()
     except Exception as e:
-        logger.exception("Помилка отримання статистики чату %s: %s", message.chat.id, e)
+        logger.exception("Error retrieving statistics for chat %s: %s", message.chat.id, e)
         await _safe_reply(message, "⚠️ Виникла помилка при отриманні статистики з бази даних.")
         return
 
@@ -523,7 +523,7 @@ async def cmd_stats(message: Message) -> None:
 
 @router.message(Command("clear", "clear_memory", ignore_case=True))
 async def cmd_clear_memory(message: Message, bot: Bot) -> None:
-    """Очищує збережену історію повідомлень чату (у групах — лише для адміністраторів)."""
+    """Clears stored chat message history (in groups: administrators only)."""
     if message.chat.type in ("group", "supergroup"):
         is_anonymous_group_admin = bool(
             message.sender_chat and message.sender_chat.id == message.chat.id
@@ -544,7 +544,7 @@ async def cmd_clear_memory(message: Message, bot: Bot) -> None:
                     )
                     return
             except Exception as e:
-                logger.warning("Не вдалося перевірити права адміністратора: %s", e)
+                logger.warning("Failed to verify administrator status: %s", e)
                 await _safe_reply(message, "⚠️ Не вдалося перевірити права адміністратора.")
                 return
 
@@ -554,7 +554,7 @@ async def cmd_clear_memory(message: Message, bot: Bot) -> None:
             await session.execute(delete(ChatDigest).where(ChatDigest.chat_id == message.chat.id))
             await session.commit()
     except Exception as e:
-        logger.exception("Помилка очищення історії чату %s: %s", message.chat.id, e)
+        logger.exception("Error clearing chat history %s: %s", message.chat.id, e)
         await _safe_reply(message, "⚠️ Виникла помилка при очищенні історії чату з бази даних.")
         return
 
@@ -564,13 +564,13 @@ async def cmd_clear_memory(message: Message, bot: Bot) -> None:
 @router.message(Command("ask", ignore_case=True))
 @router.message(F.photo & F.caption.regexp(r"^/ask(?:@\S+)?(?:\s|$)", mode="search"))
 async def cmd_ask(message: Message, bot: Bot, command: CommandObject | None = None) -> None:
-    """Пошук інформації в інтернеті або пояснення через новішу модель Gemini (/ask)."""
+    """Web search or AI explanation via Gemini 3 model (/ask)."""
     if command is not None:
         raw_query = (command.args or "").strip()
     else:
         caption = (message.caption or "").strip()
         bot_username = await _get_bot_username(bot)
-        # Перевіряємо, щоб /ask@ІншийБот у підписі до фото не перехоплювався
+        # Verify /ask@OtherBot in photo caption is not intercepted
         m = re.match(r"^/ask(?:@(\S+))?(?:\s+(.*))?$", caption, flags=re.IGNORECASE | re.DOTALL)
         if not m:
             return
@@ -594,16 +594,16 @@ async def cmd_ask(message: Message, bot: Bot, command: CommandObject | None = No
 @router.message(BotMentionFilter())
 async def handle_bot_mention(message: Message, bot: Bot) -> None:
     """
-    Обробляє пінг бота через @username:
-    - якщо після пінгу написано 'суммарі 4' -> робить звіт за 4 години;
-    - якщо написано запитання або зроблено Reply на повідомлення/фото -> шукає в інтернеті або пояснює через Gemini.
+    Handles bot mention via @username:
+    - if mention contains 'summary 4' -> generates 4-hour summary;
+    - if contains a question or reply to message/photo -> searches web or explains via Gemini.
     """
     bot_username = await _get_bot_username(bot)
     raw_text = message.text or message.caption or ""
 
     cleaned_query = re.sub(rf"(?i)@{re.escape(bot_username)}\b", "", raw_text).strip()
 
-    # Якщо користувач пінганув бота і написав "@bot суммарі 4"
+    # If user pinged the bot with summary intent: "@bot summary 4"
     summary_match = MENTION_SUMMARY_REGEX.match(cleaned_query)
     if summary_match and not message.reply_to_message:
         hours = _parse_hours(summary_match.group(1))
@@ -625,14 +625,14 @@ async def handle_bot_mention(message: Message, bot: Bot) -> None:
 @router.message(F.chat.type == "private", F.text | F.photo)
 async def handle_private_direct_message(message: Message, bot: Bot) -> None:
     """
-    В особистих повідомленнях з ботом: якщо користувач пише звичайне повідомлення або кидає фото
-    без команд, бот одразу відповідає через Gemini (і паралельно логує текст).
+    In private chat with bot: if user sends message or photo without commands,
+    bot immediately answers via Gemini (and logs text).
     """
     raw_text = (message.text or message.caption or "").strip()
     if raw_text.startswith("/"):
         return
 
-    # Якщо в особистих написали "суммарі 4"
+    # If private chat received 'summary 4'
     summary_match = MENTION_SUMMARY_REGEX.match(raw_text)
     if summary_match and not message.reply_to_message:
         hours = _parse_hours(summary_match.group(1))

@@ -23,3 +23,8 @@ ignore = [
 [tool.bandit]
 exclude_dirs = ["tests", "venv", ".venv"]
 skips = ["B101", "B110", "B112"]  # Allow assert statements and explicit best-effort fallbacks
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-v"

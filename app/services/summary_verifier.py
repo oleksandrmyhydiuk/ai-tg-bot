@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 
 def _coerce_msg_ids(value: Any) -> list[int]:
-    """Перетворює список ID повідомлень (зокрема рядки типу '#1045' або '1045') у список int."""
+    """Coerces message ID list (strings like '#1045' or '1045') to list of int."""
     if value is None:
         return []
     if isinstance(value, (int, str)):
@@ -39,7 +39,7 @@ def _coerce_msg_ids(value: Any) -> list[int]:
 
 
 def _coerce_participants(value: Any) -> list[str]:
-    """Нормалізує список учасників."""
+    """Normalizes participant list."""
     if value is None:
         return []
     if isinstance(value, str):
@@ -58,7 +58,7 @@ def _coerce_participants(value: Any) -> list[str]:
 
 
 def _clean_plain_text(text: str) -> str:
-    """Очищує текст від Markdown-зірочок та бектиків, зберігаючи #ID повідомлень."""
+    """Strips Markdown asterisks and backticks while preserving #ID citations."""
     if not text:
         return ""
     cleaned = re.sub(r"\*\*(.+?)\*\*", r"\1", text)
@@ -153,8 +153,8 @@ class ChatSummarySchema(BaseModel):
 
 def parse_summary_json(raw_text: str) -> ChatSummarySchema | None:
     """
-    Парсить JSON-відповідь від LLM (очищуючи можливі markdown-блоки ```json ... ```
-    або зайвий текст навколо зовнішніх фігурних дужок {...}) та валідує через ChatSummarySchema.
+    Parses JSON response from LLM, stripping markdown code blocks,
+    and validates schema with ChatSummarySchema.
     """
     if not raw_text or not raw_text.strip():
         return None
@@ -181,14 +181,14 @@ def parse_summary_json(raw_text: str) -> ChatSummarySchema | None:
             except Exception:
                 continue
 
-    logger.warning("Не вдалося розпарсити JSON підсумку з відповіді LLM (довжина=%d).", len(raw_text))
+    logger.warning("Failed to parse summary JSON from LLM response (length=%d).", len(raw_text))
     return None
 
 
 def _speaker_matches(participant: str, valid_speakers: set[str]) -> bool:
     """
-    Перевіряє, чи ім'я учасника відповідає реальному списку учасників вікна
-    (регістронезалежний точний збіг або входження токена/підрядка).
+    Checks if participant name matches real speaker list in window
+    (case-insensitive exact or token/substring match).
     """
     p_clean = participant.strip()
     if not p_clean:
@@ -220,9 +220,9 @@ def verify_and_prune_summary(
     valid_speakers: set[str] | None = None,
 ) -> ChatSummarySchema:
     """
-    Перевіряє згенерований підсумок проти реальних message_id та імен учасників у вікні.
-    Видаляє вигадані message_id, відкидає пункти без жодного валідного доказу (evidence_msg_ids)
-    та фільтрує неіснуючих учасників.
+    Verifies generated summary against ground-truth message_ids and speaker names in window.
+    Removes fabricated message_ids, drops items without valid evidence_msg_ids,
+    and filters out hallucinated participants.
     """
     enforce_msg_ids = bool(valid_msg_ids)
     enforce_speakers = bool(valid_speakers)
@@ -235,7 +235,7 @@ def verify_and_prune_summary(
                 if mid in valid_msg_ids and mid not in kept_ids:
                     kept_ids.append(mid)
             if not kept_ids:
-                logger.debug("Відкинуто тему без валідних message_id: %s", topic.title)
+                logger.debug("Pruned topic without valid message_ids: %s", topic.title)
                 continue
         else:
             kept_ids = list(dict.fromkeys(topic.evidence_msg_ids))
@@ -265,7 +265,7 @@ def verify_and_prune_summary(
                 if mid in valid_msg_ids and mid not in kept_ids:
                     kept_ids.append(mid)
             if not kept_ids:
-                logger.debug("Відкинуто рішення/висновок без валідних message_id: %s", decision.text)
+                logger.debug("Pruned decision/outcome without valid message_ids: %s", decision.text)
                 continue
         else:
             kept_ids = list(dict.fromkeys(decision.evidence_msg_ids))
@@ -311,10 +311,10 @@ def format_message_link(
     chat_username: str | None = None,
 ) -> str:
     """
-    Формує посилання на конкретне повідомлення в Telegram:
-    - публічний чат із username -> https://t.me/<username>/<message_id>
-    - приватна супергрупа (-100...) -> https://t.me/c/<internal_id>/<message_id>
-    - звичайна група або приватний чат -> #<message_id>
+    Constructs link to specific Telegram message:
+    - public chat with username -> https://t.me/<username>/<message_id>
+    - private supergroup (-100...) -> https://t.me/c/<internal_id>/<message_id>
+    - group without username or private chat -> #<message_id>
     """
     if chat_username and chat_username.strip():
         clean_username = chat_username.strip().lstrip("@")
@@ -336,7 +336,7 @@ def format_citation_badge(
     max_links: int = 2,
 ) -> str:
     """
-    Формує компактний блок посилань-джерел для пункту звіту (до max_links посилань).
+    Constructs compact citation link badge for a report item (up to max_links citations).
     """
     if not evidence_msg_ids or max_links <= 0:
         return ""
@@ -361,7 +361,7 @@ def render_summary_text(
     header_note: str | None = None,
 ) -> str:
     """
-    Рендерить перевірений ChatSummarySchema у чистий український текст без Markdown-розмітки.
+    Renders verified ChatSummarySchema into clean plain text without markdown syntax.
     """
     sections: list[str] = []
 

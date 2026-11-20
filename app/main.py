@@ -4,7 +4,7 @@ import logging
 from pathlib import Path
 import sys
 
-# Дозволяє запускати бота як через `python -m app.main`, так і напряму з VS Code (`python app/main.py`)
+# Allows running the bot either as `python -m app.main` or directly from VS Code (`python app/main.py`)
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
@@ -31,10 +31,10 @@ logger = logging.getLogger(__name__)
 
 
 async def _hourly_digest_loop() -> None:
-    """Вбудований фоновий цикл asyncio (без сторонніх бібліотек apscheduler): щогодини робить дайджест і очищує старі записи."""
+    """Built-in asyncio background loop: runs hourly digests and cleans up outdated records."""
     interval_seconds = max(60, settings.digest_interval_minutes * 60)
     logger.info(
-        "Фоновий планувальник запущено (погодинний дайджест та очищення БД кожні %d хв).",
+        "Background scheduler started (hourly digest and DB cleanup every %d min).",
         settings.digest_interval_minutes,
     )
     while True:
@@ -43,14 +43,14 @@ async def _hourly_digest_loop() -> None:
 
 
 async def _setup_bot_commands(bot: Bot) -> None:
-    """Реєструє список команд бота в інтерфейсі Telegram (для особистих та групових чатів)."""
+    """Registers bot command list in Telegram UI (for private and group chats)."""
     bot_commands = [
-        BotCommand(command="start", description="Перелік команд та опис можливостей бота"),
-        BotCommand(command="help", description="Довідка по командах бота"),
-        BotCommand(command="summary", description="Звіт чату за N годин (напр. /summary 4)"),
-        BotCommand(command="ask", description="Пошук в інтернеті або пояснення через Gemini 3"),
-        BotCommand(command="stats", description="Статистика повідомлень та топ активних учасників"),
-        BotCommand(command="clear", description="Очистити збережену історію чату (адмінам)"),
+        BotCommand(command="start", description="List commands and bot capabilities"),
+        BotCommand(command="help", description="Show bot command help and usage"),
+        BotCommand(command="summary", description="Generate chat summary for N hours (e.g. /summary 4)"),
+        BotCommand(command="ask", description="Web search or AI explanation via Gemini 3"),
+        BotCommand(command="stats", description="Chat message statistics and most active participants"),
+        BotCommand(command="clear", description="Clear stored chat history (admins only)"),
     ]
     for scope in (
         BotCommandScopeDefault(),
@@ -60,7 +60,7 @@ async def _setup_bot_commands(bot: Bot) -> None:
         try:
             await bot.set_my_commands(bot_commands, scope=scope)
         except Exception as e:
-            logger.warning("Не вдалося зареєструвати меню команд (%s): %s", type(scope).__name__, e)
+            logger.warning("Failed to register command menu (%s): %s", type(scope).__name__, e)
 
 
 async def main() -> None:
@@ -70,27 +70,27 @@ async def main() -> None:
     )
     dp = Dispatcher()
 
-    # Реєстрація роутерів (спочатку команди та пінги, потім фоновий логер повідомлень)
+    # Register routers (commands and pings first, then background message logger)
     dp.include_router(commands.router)
     dp.include_router(group_events.router)
 
     bg_task: asyncio.Task | None = None
 
     try:
-        logger.info("Ініціалізація бази даних SQLite...")
+        logger.info("Initializing SQLite database...")
         await init_db()
 
         bg_task = asyncio.create_task(_hourly_digest_loop())
 
         await bot.delete_webhook(drop_pending_updates=True)
         await _setup_bot_commands(bot)
-        logger.info("Бот запущений і слухає повідомлення...")
+        logger.info("Bot is running and listening for messages...")
         await dp.start_polling(bot)
     except Exception as e:
-        logger.exception("Критична помилка під час запуску або роботи бота: %s", e)
+        logger.exception("Critical error during bot startup or execution: %s", e)
         raise
     finally:
-        logger.info("Зупинка сервісів...")
+        logger.info("Shutting down services...")
         if bg_task is not None:
             bg_task.cancel()
             with suppress(asyncio.CancelledError):

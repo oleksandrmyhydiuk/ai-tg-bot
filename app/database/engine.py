@@ -33,13 +33,13 @@ _CHAT_DIGESTS_NEW_COLUMNS: list[tuple[str, str]] = [
 
 def _resolve_database_url(raw_url: str) -> str:
     """
-    Гарантує існування та доступність на запис директорії для SQLite
-    (як у Docker, так і при локальному запуску з VS Code на Windows або без chown на Linux).
+    Ensures that the directory for SQLite exists and is writable
+    (both in Docker and local execution from VS Code on Windows or non-chowned Linux mounts).
     """
     if not raw_url.startswith("sqlite"):
         return raw_url
 
-    # Якщо на Windows у .env залишився Docker-шлях //app/data/..., автоматично замінюємо на відносний ./data/...
+    # If Windows .env contains Docker path //app/data/..., automatically normalize to relative ./data/...
     if os.name == "nt" and "/app/data/" in raw_url:
         raw_url = "sqlite+aiosqlite:///./data/bot_database.db"
 
@@ -58,22 +58,22 @@ def _resolve_database_url(raw_url: str) -> str:
             fallback_dir.mkdir(parents=True, exist_ok=True)
             fallback_file = (fallback_dir / db_path.name).as_posix()
             logger.warning(
-                "🚨 УВАГА: Не вдалося створити директорію БД %s (%s)! "
-                "Використовується тимчасова директорія %s — дані можуть бути втрачені після перезавантаження!",
+                "WARNING: Failed to create database directory %s (%s)! "
+                "Falling back to temporary directory %s - data may be lost after reboot!",
                 parent_dir,
                 e,
                 fallback_file,
             )
             return f"sqlite+aiosqlite:///{fallback_file}"
 
-        # Перевіряємо права на запис (наприклад, якщо на Linux забули зробити chown 10001:10001 ./data)
+        # Check write permissions (e.g. if Linux user forgot 'sudo chown 10001:10001 ./data')
         if not os.access(parent_dir, os.W_OK):
             fallback_dir = Path(tempfile.gettempdir()) / "hybrid_bot_data"
             fallback_dir.mkdir(parents=True, exist_ok=True)
             fallback_file = (fallback_dir / db_path.name).as_posix()
             logger.warning(
-                "🚨 УВАГА: Немає прав на запис у %s (виконайте 'sudo chown -R 10001:10001 data'). "
-                "Тимчасово використовується резервна БД у tempdir: %s — дані можуть не зберігатися між перезапусками!",
+                "WARNING: Directory %s is not writable (run 'sudo chown -R 10001:10001 data'). "
+                "Temporarily falling back to backup DB in tempdir: %s - data might not persist across restarts!",
                 parent_dir,
                 fallback_file,
             )
@@ -90,7 +90,7 @@ engine = create_async_engine(
     connect_args={"timeout": 30} if "sqlite" in RESOLVED_DB_URL else {},
 )
 
-# Безпечне налаштування PRAGMA для SQLite (якщо файлова система bind-mount не підтримує WAL, не падаємо)
+# Safe PRAGMA setup for SQLite (avoid crashing if filesystem bind-mount does not support WAL)
 if "sqlite" in RESOLVED_DB_URL:
     @event.listens_for(engine.sync_engine, "connect")
     def set_sqlite_pragma(dbapi_connection, connection_record):
@@ -99,7 +99,7 @@ if "sqlite" in RESOLVED_DB_URL:
             cursor.execute("PRAGMA journal_mode=WAL;")
             cursor.execute("PRAGMA synchronous=NORMAL;")
         except Exception as e:
-            logger.warning("WAL-режим не підтримується файловою системою, використовується стандартний журнал: %s", e)
+            logger.warning("WAL mode not supported by filesystem, falling back to standard journal: %s", e)
         try:
             cursor.execute("PRAGMA busy_timeout=15000;")
             cursor.execute("PRAGMA foreign_keys=ON;")
@@ -115,9 +115,9 @@ async_session_factory = async_sessionmaker(
 
 def _migrate_sqlite_schema(sync_conn: Connection) -> None:
     """
-    Ідемпотентна міграція SQLite-схеми для існуючих баз даних:
-    додає нові колонки у chat_logs та chat_digests, знімає NOT NULL з chat_logs.user_id за потреби
-    та створює композитні індекси idx_chat_reply_msg і idx_chat_thread.
+    Idempotent SQLite schema migration for existing databases:
+    adds new columns to chat_logs and chat_digests, drops NOT NULL from chat_logs.user_id if needed,
+    and creates composite indexes idx_chat_reply_msg and idx_chat_thread.
     """
     if "sqlite" not in RESOLVED_DB_URL:
         return
@@ -127,16 +127,16 @@ def _migrate_sqlite_schema(sync_conn: Connection) -> None:
         existing_log_cols = {row[1] for row in log_info}
         for col_name, col_type in _CHAT_LOGS_NEW_COLUMNS:
             if col_name not in existing_log_cols:
-                logger.info("Міграція БД: додаю колонку chat_logs.%s (%s)", col_name, col_type)
+                logger.info("DB Migration: adding column chat_logs.%s (%s)", col_name, col_type)
                 sync_conn.execute(
                     text(f"ALTER TABLE chat_logs ADD COLUMN {col_name} {col_type}")
                 )
 
-        # Якщо у старій таблиці chat_logs колонка user_id мала NOT NULL (row[3] == 1),
-        # перебудовуємо таблицю, щоб анонімні адміни та пости каналів (user_id=NULL) не викликали помилку
+        # If legacy chat_logs.user_id has NOT NULL (row[3] == 1),
+        # rebuild table so anonymous admins and channel posts (user_id=NULL) do not trigger errors
         user_id_notnull = any(row[1] == "user_id" and row[3] == 1 for row in log_info)
         if user_id_notnull:
-            logger.info("Міграція БД: оновлюю chat_logs.user_id до nullable=True")
+            logger.info("DB Migration: updating chat_logs.user_id to nullable=True")
             all_cols = (
                 "chat_id, message_id, user_id, text, timestamp, is_processed, "
                 "reply_to_message_id, reply_to_user_id, reply_to_author, reply_to_snippet, "
@@ -216,7 +216,7 @@ def _migrate_sqlite_schema(sync_conn: Connection) -> None:
         existing_digest_cols = {row[1] for row in digest_info}
         for col_name, col_type in _CHAT_DIGESTS_NEW_COLUMNS:
             if col_name not in existing_digest_cols:
-                logger.info("Міграція БД: додаю колонку chat_digests.%s (%s)", col_name, col_type)
+                logger.info("DB Migration: adding column chat_digests.%s (%s)", col_name, col_type)
                 sync_conn.execute(
                     text(f"ALTER TABLE chat_digests ADD COLUMN {col_name} {col_type}")
                 )

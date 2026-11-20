@@ -1,0 +1,3 @@
+# Main Entrypoint
+
+::: app.main

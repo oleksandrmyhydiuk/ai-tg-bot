@@ -82,8 +82,8 @@ def run_coro(coro):
 
 class _SyncSessionAdapter:
     """
-    Адаптер синхронної сесії SQLAlchemy під інтерфейс AsyncSession (`async with`, `await session.execute(...)`, `await session.commit()`),
-    щоб уникати зависання фонових потоків aiosqlite у Windows sandbox під час unit-тестів.
+    Synchronous SQLAlchemy session adapter matching the AsyncSession interface (`async with`, `await session.execute(...)`, `await session.commit()`),
+    avoiding background thread locking in SQLite during unit tests.
     """
 
     def __init__(self, sync_session_factory) -> None:

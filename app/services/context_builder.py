@@ -51,8 +51,8 @@ class SummaryContextBundle:
 
 def format_kyiv_datetime(dt: datetime | None, include_date: bool = True) -> str:
     """
-    Конвертує naive UTC (або aware) datetime у часовий пояс Europe/Kyiv
-    та форматує як '%m-%d %H:%M' (якщо include_date=True) або '%H:%M' (якщо False).
+    Converts naive UTC (or aware) datetime to Europe/Kyiv timezone
+    and formats as '%m-%d %H:%M' (if include_date=True) or '%H:%M' (if False).
     """
     if dt is None:
         return "--.-- --:--" if include_date else "--:--"
@@ -65,7 +65,7 @@ def format_kyiv_datetime(dt: datetime | None, include_date: bool = True) -> str:
 
 
 def _truncate_single_line(text: str | None, max_len: int = 60) -> str:
-    """Нормалізує рядок в один рядок без переносів і обрізає до max_len символів."""
+    """Normalizes string to a single line without linebreaks and truncates to max_len chars."""
     if not text:
         return ""
     clean = re.sub(r"\s+", " ", text).strip()
@@ -75,7 +75,7 @@ def _truncate_single_line(text: str | None, max_len: int = 60) -> str:
 
 
 def _base_speaker_name(log: ChatLog, user: User | None) -> str:
-    """Визначає базове ім'я автора повідомлення до усунення тезок."""
+    """Determines base author name of message before namesake disambiguation."""
     if getattr(log, "is_bot_message", False):
         return "Бот [БОТ]"
     if user is not None and getattr(user, "full_name", None):
@@ -93,10 +93,10 @@ def _build_speaker_resolver(
     rows: list[tuple[ChatLog, User | None]],
 ) -> tuple[dict[tuple[int | None, str], str], set[str]]:
     """
-    Аналізує всі пари (ChatLog, User | None) у вікні для виявлення тезок
-    (різних user_id з однаковим full_name) та повертає:
-    - словник (user_id, base_name) -> disambiguated_label
-    - множину всіх валідних варіантів імен учасників (valid_speakers)
+    Analyzes all (ChatLog, User | None) pairs in window to detect namesakes
+    (different user_ids with the same full_name) and returns:
+    - dict (user_id, base_name) -> disambiguated_label
+    - set of all valid speaker name variants (valid_speakers)
     """
     name_to_identities: dict[str, set[int | None]] = {}
     for log, user in rows:
@@ -162,7 +162,7 @@ def _format_single_message_line(
     msg_lookup: dict[int, tuple[ChatLog, User | None]],
 ) -> str:
     """
-    Форматує одне повідомлення за шаблоном:
+    Formats single message line with format:
     [{MM-DD HH:MM}] #{message_id} | {speaker}{reply_part}{forward_part}{media_part}: {clean_text}
     """
     ts_str = format_kyiv_datetime(getattr(log, "timestamp", None), include_date=True)
@@ -177,7 +177,7 @@ def _format_single_message_line(
     reply_to_snippet = getattr(log, "reply_to_snippet", None)
     quote_text = getattr(log, "quote_text", None)
 
-    # Зворотна сумісність зі старими записами до міграції: "(у відповідь Автор): текст"
+    # Backward compatibility with legacy pre-migration rows: "(in reply to Author): text"
     is_legacy_prefixed = (
         clean_text.startswith("(у відповідь ")
         and reply_to_id is None
@@ -239,8 +239,8 @@ def _format_rows_with_threads(
     msg_lookup: dict[int, tuple[ChatLog, User | None]],
 ) -> list[str]:
     """
-    Форматує список повідомлень, додаючи заголовки [Тема/Топік #{thread_id}],
-    якщо у вибірці присутні декілька різних ненульових message_thread_id.
+    Formats list of messages adding headers [Тема/Топік #{thread_id}]
+    if multiple distinct non-null message_thread_ids exist.
     """
     distinct_threads = {
         getattr(log, "message_thread_id", None)
@@ -272,8 +272,8 @@ async def hydrate_orphan_parents(
     logs: list[ChatLog],
 ) -> dict[int, tuple[ChatLog, User | None]]:
     """
-    Знаходить усі reply_to_message_id у переданих logs, яких немає серед {l.message_id for l in logs},
-    та підвантажує їх із таблиці ChatLog (разом із User) одним пакетним запитом.
+    Finds all reply_to_message_id in logs not present in current window
+    and fetches them from ChatLog with User in a single batch query.
     """
     if not logs:
         return {}
@@ -307,9 +307,9 @@ def format_messages_for_digest(
     orphan_parents: dict[int, tuple[ChatLog, User | None]] | None = None,
 ) -> SummaryContextBundle:
     """
-    Форматує пачку повідомлень (ChatLog, User | None) для створення погодинного дайджесту.
-    Включає секцію [КОНТЕКСТ ДО ПЕРІОДУ ...] для повідомлень-батьків поза вікном
-    та основну секцію [ПОВІДОМЛЕННЯ ЗА ПЕРІОД] всередині <chat_transcript>...</chat_transcript>.
+    Formats a batch of messages (ChatLog, User | None) for hourly digest generation.
+    Includes context section for parent messages outside window
+    and main message section inside <chat_transcript>...</chat_transcript>.
     """
     normalized_rows: list[tuple[ChatLog, User | None]] = [
         (r[0], r[1]) for r in rows
@@ -387,8 +387,8 @@ def _extract_metadata_from_digest(
     valid_speakers: set[str],
 ) -> None:
     """
-    Витягує збережені evidence_msg_ids та participants із ChatDigest.structured_json
-    (а також будь-які згадки #ID у тексті дайджесту) для збереження валідних посилань.
+    Extracts stored evidence_msg_ids and participants from ChatDigest.structured_json
+    (as well as #ID mentions in digest text) to preserve valid citations.
     """
     structured_raw = getattr(digest, "structured_json", None)
     if structured_raw:
@@ -431,12 +431,12 @@ async def build_summary_context(
     hours: float,
 ) -> SummaryContextBundle:
     """
-    Будує контекст для /summary за стратегією Raw-First:
-    1) Якщо всі сирі повідомлення за період присутні в ChatLog і вкладаються у ліміти
-       (summary_raw_message_limit та summary_raw_char_limit) — використовує виключно сирі
-       повідомлення з підвантаженням батьківських реплаїв (Pure Raw Mode), без втрат проміжних дайджестів.
-    2) Якщо повідомлень більше за ліміт або старіші сирі повідомлення вже видалені —
-       комбінує погодинні дайджести ChatDigest за період та свіжі сирі повідомлення ChatLog.
+    Builds context for /summary using a Raw-First strategy:
+    1) If all raw messages in period exist in ChatLog and fit within limits
+       (summary_raw_message_limit and summary_raw_char_limit), uses purely raw
+       messages with hydrated orphan replies (Pure Raw Mode), without lossy intermediate digests.
+    2) If message count exceeds limit or older raw logs were pruned,
+       combines hourly ChatDigest records for the period with fresh raw ChatLog messages.
     """
     raw_msg_limit = int(getattr(settings, "summary_raw_message_limit", 400))
     raw_char_limit = int(getattr(settings, "summary_raw_char_limit", 60000))
@@ -460,7 +460,7 @@ async def build_summary_context(
     raw_rows_fetched = list(reversed((await session.execute(raw_stmt)).all()))
     raw_rows: list[tuple[ChatLog, User | None]] = [(r[0], r[1]) for r in raw_rows_fetched]
 
-    # Перевіряємо режим Pure Raw Mode
+    # Check Pure Raw Mode eligibility
     if 0 < total_available_messages <= raw_msg_limit and raw_rows:
         orphan_parents = await hydrate_orphan_parents(
             session, chat_id, [log for log, _ in raw_rows]
@@ -469,7 +469,7 @@ async def build_summary_context(
         if len(bundle.transcript_text) <= raw_char_limit:
             return bundle
 
-    # Режим комбінації ChatDigest + свіжі/хвостові ChatLog (або обрізані сирі повідомлення)
+    # Combine ChatDigest + fresh/tail ChatLog mode (or truncated raw messages)
     digest_time_expr = func.coalesce(ChatDigest.period_end, ChatDigest.created_at)
     digest_order_expr = func.coalesce(ChatDigest.period_start, ChatDigest.created_at)
     d_stmt = (
@@ -498,7 +498,7 @@ async def build_summary_context(
             raw_fallback_lines=[],
         )
 
-    # Визначаємо, які сирі повідомлення додати після дайджестів
+    # Determine which raw messages to append after digests
     selected_raw_rows: list[tuple[ChatLog, User | None]]
     if digests:
         max_digest_end: datetime | None = None
@@ -563,7 +563,7 @@ async def build_summary_context(
 
     was_truncated = total_available_messages > raw_msg_limit and not digests
 
-    # Контроль ліміту символів raw_char_limit (зберігаємо найновіші повідомлення)
+    # Control character limit raw_char_limit (retaining newest messages)
     digests_section_text = "\n\n".join(digest_blocks)
     reserved_chars = len(digests_section_text) + 500
     available_for_raw = max(4000, raw_char_limit - reserved_chars)
@@ -626,7 +626,7 @@ async def build_summary_context(
     if len(digests) == 1 and not selected_raw_rows:
         single_digest_fast_path = digests[0].digest_text
 
-    # Кількість врахованих повідомлень
+    # Effective message count calculation
     if digests:
         digest_msg_sum = sum((getattr(d, "message_count", None) or 0) for d in digests)
         effective_msg_count = digest_msg_sum + len(selected_raw_rows)
