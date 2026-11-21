@@ -9,6 +9,7 @@ This guide walks you through setting up and running the AI Telegram Bot locally 
 - **Python 3.11** or **Python 3.12**
 - A **Telegram Bot Token** from [@BotFather](https://t.me/BotFather)
 - A **Google Gemini API Key** from [Google AI Studio](https://aistudio.google.com/)
+- **FFmpeg** (included in the Docker image; required locally for `yt-dlp` video merging)
 - (Optional) **Docker** and **Docker Compose**
 
 ---

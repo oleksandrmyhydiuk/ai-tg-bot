@@ -13,12 +13,13 @@ Features automated hourly background digests, on-demand time-sliced summaries (`
 
 ## Key Highlights
 
+- **Modular Per-Chat Architecture (`/start`, `/modules`, `/settings`)**: Interactive inline-keyboard settings (admin-only in groups) to enable or disable any of the 7 modules per chat, with dynamic `BotCommandScopeChat` command syncing and passive logging isolation.
 - **Pure Free Tier Cloud Engine**: Relies 100% on free-tier Gemini and Gemma API models with automated fallback cascades (`gemini-3.8-flash`, `gemma-4-31b-it`, `gemma-4-26b-a4b-it`, `gemini-3.6-flash`, `gemini-3.1-flash-lite`, `gemini-3.5-flash-lite`).
-- **Closed-World Anti-Hallucination Pipeline**: Summaries validate every topic and decision against real message IDs and speaker names stored in the database. Hallucinated facts, fabricated participants, or phantom promises are pruned automatically.
-- **Hourly Background Digest & Periodic Cleanup**: Continuous background task collects and summarizes chat messages every hour without holding SQLite transactions open, keeping subsequent `/summary` queries lightning-fast and quota-friendly.
-- **Rich Context Ingestion**: Captures message replies (`↩ #1045 Author: "..."`), Telegram 2.0 quote fragments, topic roots, forwarded channels, and media placeholders.
-- **Per-Chat Command Scoping**: Dynamically registers native bot command menus for individual chats and groups.
-- **Docker & Security Hardened**: Runs as a non-root user (`botuser`, UID 10001), automated dependency auditing via `pip-audit`, Bandit static security analysis, and Ruff linting.
+- **Closed-World Anti-Hallucination Pipeline**: `/summary` and `/tasks` validate every topic, decision, and open question against real message IDs and speaker names stored in SQLite.
+- **Web-Grounded Q&A, Vision & Multi-Turn Replies (`/ask`)**: Answers questions with Google Search grounding (including source URLs), reply-chain history reconstruction, and image analysis up to 10 MB.
+- **Media Downloader (`/dl` & Auto-Download)**: SSRF-safe `yt-dlp` + `ffmpeg` downloader for TikTok, Instagram, and YouTube videos up to Telegram's 50 MB limit.
+- **Search, Analytics, Voice & Daily Digests**: Full-text history search (`/find`), activity analytics (`/stats`), Gemini audio transcription (`/transcribe`), and scheduled daily digests (`/digest`).
+- **Docker & Security Hardened**: Runs as a non-root user (`botuser`, UID 10001) with `ffmpeg`, automated dependency auditing via `pip-audit`, Bandit SAST, and Ruff linting.
 
 ---
 
