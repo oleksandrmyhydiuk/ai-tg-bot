@@ -30,6 +30,13 @@ _CHAT_DIGESTS_NEW_COLUMNS: list[tuple[str, str]] = [
     ("structured_json", "TEXT"),
 ]
 
+_CHAT_SETTINGS_NEW_COLUMNS: list[tuple[str, str]] = [
+    ("enabled_modules", "TEXT NOT NULL DEFAULT '[]'"),
+    ("daily_digest_time", "VARCHAR(5)"),
+    ("daily_digest_last_sent", "VARCHAR(10)"),
+    ("updated_at", "DATETIME"),
+]
+
 
 def _resolve_database_url(raw_url: str) -> str:
     """
@@ -219,6 +226,33 @@ def _migrate_sqlite_schema(sync_conn: Connection) -> None:
                 logger.info("DB Migration: adding column chat_digests.%s (%s)", col_name, col_type)
                 sync_conn.execute(
                     text(f"ALTER TABLE chat_digests ADD COLUMN {col_name} {col_type}")
+                )
+
+    settings_info = sync_conn.execute(text("PRAGMA table_info(chat_settings)")).fetchall()
+    if not settings_info:
+        logger.info("DB Migration: creating table chat_settings")
+        sync_conn.execute(
+            text(
+                "CREATE TABLE IF NOT EXISTS chat_settings ("
+                "chat_id BIGINT NOT NULL PRIMARY KEY, "
+                "enabled_modules TEXT NOT NULL, "
+                "daily_digest_time VARCHAR(5), "
+                "daily_digest_last_sent VARCHAR(10), "
+                "updated_at DATETIME"
+                ")"
+            )
+        )
+    else:
+        existing_settings_cols = {row[1] for row in settings_info}
+        for col_name, col_type in _CHAT_SETTINGS_NEW_COLUMNS:
+            if col_name not in existing_settings_cols:
+                logger.info(
+                    "DB Migration: adding column chat_settings.%s (%s)",
+                    col_name,
+                    col_type,
+                )
+                sync_conn.execute(
+                    text(f"ALTER TABLE chat_settings ADD COLUMN {col_name} {col_type}")
                 )
 
 

@@ -4,6 +4,7 @@ from aiogram.types import Message
 from sqlalchemy.dialects.sqlite import insert as sqlite_upsert
 from app.database.engine import async_session_factory
 from app.database.models import User, ChatLog, utc_now
+from app.modules.registry import chat_requires_logging
 
 logger = logging.getLogger(__name__)
 router = Router(name="group_logger_router")
@@ -23,7 +24,19 @@ SUPPORTED_CONTENT_FILTER = (
     | F.location
 )
 
-_SKIPPED_COMMANDS = ("/clear", "/summary", "/stats", "/start", "/help")
+_SKIPPED_COMMANDS = (
+    "/clear",
+    "/summary",
+    "/tasks",
+    "/stats",
+    "/start",
+    "/help",
+    "/dl",
+    "/download",
+    "/find",
+    "/transcribe",
+    "/digest",
+)
 
 
 def _is_service_message(message: Message) -> bool:
@@ -328,12 +341,20 @@ async def log_text_message(
     is_edit: bool = False,
 ) -> None:
     """Asynchronously saves message text, media fallback, replies, quotes, and metadata to DB."""
+    if message is None or getattr(message, "chat", None) is None:
+        return
+    if not await chat_requires_logging(message.chat.id):
+        return
     await _upsert_message_record(message, custom_text=custom_text, is_edit=is_edit)
 
 
 @router.edited_message(SUPPORTED_CONTENT_FILTER)
 async def log_edited_message(message: Message) -> None:
     """Updates text and metadata of edited message without resetting is_processed flag."""
+    if message is None or getattr(message, "chat", None) is None:
+        return
+    if not await chat_requires_logging(message.chat.id):
+        return
     await _upsert_message_record(message, is_edit=True)
 
 
@@ -341,6 +362,7 @@ async def log_bot_message(
     bot_message: Message,
     reply_to_message: Message | None = None,
     text_override: str | None = None,
+    force: bool = False,
 ) -> None:
     """
     Saves bot's own response into ChatLog (with is_bot_message=True and sender_name='Bot')
@@ -348,6 +370,8 @@ async def log_bot_message(
     """
     try:
         if bot_message is None or getattr(bot_message, "chat", None) is None:
+            return
+        if not force and not await chat_requires_logging(bot_message.chat.id):
             return
 
         content_text = (

@@ -34,6 +34,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN groupadd -g 10001 botgroup && \
     useradd -u 10001 -g botgroup -s /sbin/nologin -M botuser && \
     mkdir -p /app/data && \

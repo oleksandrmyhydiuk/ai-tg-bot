@@ -6,7 +6,7 @@ import time
 from aiogram import Router, Bot, F
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, CommandObject, Filter
-from aiogram.types import Message
+from aiogram.types import InlineKeyboardMarkup, Message
 from sqlalchemy import select, func, delete
 from app.config import settings
 from app.database.engine import async_session_factory
@@ -106,22 +106,35 @@ def _split_text_chunks(text: str, max_len: int = MAX_TELEGRAM_TEXT_LEN) -> list[
     return chunks or [text[:max_len]]
 
 
-async def _safe_answer_text(message: Message, text: str) -> Message:
+_split_telegram_text = _split_text_chunks
+
+
+async def _safe_answer_text(
+    message: Message,
+    text: str,
+    reply_markup: InlineKeyboardMarkup | None = None,
+) -> Message:
     """
     Safely responds to message (falling back to answer if reply is unavailable).
     If text exceeds MAX_TELEGRAM_TEXT_LEN, splits into multiple sequential messages.
     """
     clean_text = strip_markdown(text) or "..."
     chunks = _split_text_chunks(clean_text, MAX_TELEGRAM_TEXT_LEN)
+    first_kwargs = {"reply_markup": reply_markup} if (reply_markup is not None and len(chunks) == 1) else {}
 
     try:
-        first_msg = await message.reply(chunks[0])
+        first_msg = await message.reply(chunks[0], **first_kwargs)
     except Exception:
-        first_msg = await message.answer(chunks[0])
+        first_msg = await message.answer(chunks[0], **first_kwargs)
 
-    for extra_chunk in chunks[1:]:
+    for idx, extra_chunk in enumerate(chunks[1:], start=1):
+        extra_kwargs = (
+            {"reply_markup": reply_markup}
+            if (reply_markup is not None and idx == len(chunks) - 1)
+            else {}
+        )
         try:
-            await message.answer(extra_chunk)
+            await message.answer(extra_chunk, **extra_kwargs)
         except (TelegramBadRequest, Exception) as e:
             logger.warning("Failed to send extra message chunk: %s", e)
             break
@@ -132,7 +145,11 @@ async def _safe_answer_text(message: Message, text: str) -> Message:
 _safe_reply = _safe_answer_text
 
 
-async def _safe_edit_text(target_message: Message, text: str) -> None:
+async def _safe_edit_text(
+    target_message: Message,
+    text: str,
+    reply_markup: InlineKeyboardMarkup | None = None,
+) -> None:
     """
     Safely strips Markdown and edits message.
     If text exceeds MAX_TELEGRAM_TEXT_LEN, splits into parts:
@@ -140,20 +157,26 @@ async def _safe_edit_text(target_message: Message, text: str) -> None:
     """
     clean_text = strip_markdown(text) or "..."
     chunks = _split_text_chunks(clean_text, MAX_TELEGRAM_TEXT_LEN)
+    first_kwargs = {"reply_markup": reply_markup} if (reply_markup is not None and len(chunks) == 1) else {}
 
     try:
-        await target_message.edit_text(chunks[0])
+        await target_message.edit_text(chunks[0], **first_kwargs)
     except Exception as e:
         logger.warning("Failed to edit message, sending new message: %s", e)
         try:
-            await target_message.answer(chunks[0])
+            await target_message.answer(chunks[0], **first_kwargs)
         except (TelegramBadRequest, Exception) as fallback_err:
             logger.error("Failed to fallback send message: %s", fallback_err)
             return
 
-    for extra_chunk in chunks[1:]:
+    for idx, extra_chunk in enumerate(chunks[1:], start=1):
+        extra_kwargs = (
+            {"reply_markup": reply_markup}
+            if (reply_markup is not None and idx == len(chunks) - 1)
+            else {}
+        )
         try:
-            await target_message.answer(extra_chunk)
+            await target_message.answer(extra_chunk, **extra_kwargs)
         except (TelegramBadRequest, Exception) as e:
             logger.warning("Failed to send extra chunk of reply: %s", e)
             break
@@ -172,18 +195,21 @@ class BotMentionFilter(Filter):
         return bool(re.search(rf"(?i)@{re.escape(bot_username)}\b", raw_text))
 
 
-def _parse_hours(arg_str: str | None) -> float:
+def _parse_hours(arg_str: str | None, default: float = DEFAULT_SUMMARY_HOURS) -> float:
     """Parses number of hours from command argument (e.g. '4', '0.5', '12h')."""
     if not arg_str:
-        return DEFAULT_SUMMARY_HOURS
+        return default
     match = re.search(r"(\d+(?:[.,]\d+)?)", arg_str)
     if not match:
-        return DEFAULT_SUMMARY_HOURS
+        return default
     try:
         val = float(match.group(1).replace(",", "."))
         return max(0.1, min(val, MAX_SUMMARY_HOURS))
     except ValueError:
-        return DEFAULT_SUMMARY_HOURS
+        return default
+
+
+_parse_summary_hours = _parse_hours
 
 
 def _format_hours_label(hours: float) -> str:
