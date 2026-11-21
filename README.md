@@ -11,21 +11,30 @@ A lightweight, asynchronous Telegram bot for group chats and direct messages pow
 
 ## Features
 
-- **Time-Windowed Chat Summaries (`/summary [hours]`)**:
-  - Summarizes discussions over any lookback window (defaults to `6` hours, up to `168` hours / 7 days).
-  - Combines pre-computed hourly digests (`ChatDigest`) with fresh unprocessed messages (`ChatLog`) to minimize token usage and latency.
+- **Modular Per-Chat Configuration (`/start`, `/modules`, `/settings`)**:
+  - Interactive inline keyboard (admin-only in groups) lets each chat toggle individual feature modules on or off.
+  - Dynamically syncs per-chat Telegram command menus via `BotCommandScopeChat` and skips passive message logging when no logging-dependent module is active.
+- **Time-Windowed Summaries & Action Items (`/summary [hours]`, `/tasks`)**:
+  - Summarizes discussions over any lookback window (defaults to `6` hours, up to `168` hours / 7 days) by combining cached hourly digests (`ChatDigest`) with fresh messages (`ChatLog`).
+  - `/tasks` extracts confirmed decisions, proposed action items, and open questions with message citations.
   - Supports `/summary 4`, `@bot summary 4`, and Ukrainian triggers (`суммарі 4`).
 - **Anti-Hallucination & Grounded Context**:
-  - Hydrates reply chains and speaker attribution so context is preserved accurately.
-  - Enforces structured JSON extraction and optional message citation links (`SUMMARY_SHOW_CITATIONS`).
-- **Web-Grounded Q&A & Vision (`/ask`, `@bot`, DMs)**:
-  - Uses newer Gemini models (`gemini-3.8-flash` with automatic fallback chain) and **Google Search Grounding** for up-to-date answers.
-  - Supports **reply-to-message** context (`@bot` in reply to a text or photo) and direct questions in private messages without slash commands.
+  - Hydrates orphan reply chains and disambiguates namesake speakers.
+  - Enforces structured JSON extraction, message ID verification, and clickable citation links (`SUMMARY_SHOW_CITATIONS`).
+- **Web-Grounded Q&A, Multi-Turn Replies & Vision (`/ask`, `@bot`, DMs)**:
+  - Uses newer Gemini models (`gemini-3.8-flash` with automatic fallback chain) and **Google Search Grounding** (with source URLs).
+  - Supports multi-turn reply-chain context (`@bot` in reply to a message or photo) and direct questions in private messages.
   - Analyzes attached or replied-to images up to 10 MB.
-- **Automated Background Maintenance**:
-  - Built-in `asyncio` loop generates hourly digests and prunes records older than `RETENTION_DAYS` (default `7` days).
+- **Video Downloader (`/dl` & Auto-Download)**:
+  - Downloads TikTok, Instagram, and YouTube videos automatically when links are posted or via `/dl <url>` using `yt-dlp` and `ffmpeg` (with SSRF validation, 50 MB Telegram cap, and per-user cooldown).
+- **Chat Search & Activity Analytics (`/find`, `/stats`)**:
+  - `/find <query>` searches stored chat history with clickable message links.
+  - `/stats [hours|24h|7d|all]` reports message volume, top active participants, peak activity hour (Europe/Kyiv), and most-replied messages.
+- **Voice Transcription & Scheduled Daily Digests (`/transcribe`, `/digest`)** *(opt-in per chat)*:
+  - `/transcribe` transcribes replied voice messages, audio files, or video notes (up to 20 MB) via Gemini.
+  - `/digest on [HH:MM]` schedules automated daily summaries at a configured Europe/Kyiv time.
 - **Production-Ready & Lightweight**:
-  - Single-container Docker setup (~512 MB RAM limit), non-root `botuser` (UID `10001`), SQLite WAL mode with automatic legacy schema migration, and per-user rate limiting.
+  - Single-container Docker setup (~512 MB RAM limit) with `ffmpeg`, non-root `botuser` (UID `10001`), SQLite WAL mode with idempotent schema migrations, and per-user rate limiting.
 
 ---
 
@@ -35,23 +44,37 @@ A lightweight, asynchronous Telegram bot for group chats and direct messages pow
 .
 ├── app/
 │   ├── config.py                  # Pydantic settings with .env fallback
-│   ├── main.py                    # Bot entry point, router setup & hourly asyncio loop
+│   ├── main.py                    # Bot entry point, modular router setup & background loops
 │   ├── database/
 │   │   ├── engine.py              # Async SQLite engine, WAL pragmas & schema migrations
-│   │   └── models.py              # SQLAlchemy ORM models (User, ChatLog, ChatDigest)
+│   │   └── models.py              # SQLAlchemy ORM models (User, ChatLog, ChatDigest, ChatSettings)
 │   ├── handlers/
-│   │   ├── commands.py            # /start, /help, /summary, /ask, /stats, /clear, @mentions, DMs
-│   │   └── group_events.py        # Asynchronous message & edit logger
+│   │   ├── commands.py            # Shared AI ask/summary helpers & legacy compatibility exports
+│   │   └── group_events.py        # Asynchronous message & edit logger (respects per-chat module state)
+│   ├── modules/
+│   │   ├── registry.py            # Module registry, in-memory cache, BotCommandScopeChat & inline UI
+│   │   ├── core.py                # /start, /modules, /settings, /help, /clear & admin callbacks
+│   │   ├── summary.py             # /summary, /tasks & @bot summary triggers
+│   │   ├── ask.py                 # /ask, @bot mentions, multi-turn reply chains & DM handler
+│   │   ├── media_dl.py            # /dl & automatic TikTok/Instagram/YouTube video downloads
+│   │   ├── search.py              # /find full-text chat history search
+│   │   ├── stats.py               # /stats activity analytics & leaderboards
+│   │   ├── voice.py               # /transcribe for voice, audio & video notes
+│   │   └── daily_digest.py        # /digest daily schedule management
 │   └── services/
 │       ├── context_builder.py     # Hybrid digest + raw tail context assembly & hydration
-│       ├── gemini_client.py       # Gemini API client, model fallback chain & hourly digest job
+│       ├── gemini_client.py       # Gemini API client, fallback chains, audio & digest jobs
+│       ├── media_downloader.py    # SSRF-safe yt-dlp video downloader
 │       └── summary_verifier.py    # Structured JSON parsing, verification & citation rendering
+├── docs/                          # Material for MkDocs source documentation & API reference
 ├── tests/
-│   └── test_foundation.py         # Unit test suite (handlers, DB migrations, context, verifier)
-├── .github/workflows/ci.yml       # CI pipeline (Ruff, Bandit, pip-audit, unittest, Docker build)
-├── Dockerfile                     # Multi-stage slim Python 3.11 image (non-root user)
+│   ├── test_foundation.py         # Core foundation tests (handlers, DB migrations, context, verifier)
+│   └── test_modules.py            # Modular features, isolation, SSRF & media downloader tests
+├── .github/workflows/ci.yml       # CI pipeline (Ruff, Bandit, pip-audit, pytest, Docker, GH Pages)
+├── Dockerfile                     # Multi-stage slim Python 3.11 image with ffmpeg (non-root user)
 ├── docker-compose.yml             # Single-service Compose configuration
-├── pyproject.toml                 # Ruff & Bandit configuration
+├── mkdocs.yml                     # MkDocs Material configuration
+├── pyproject.toml                 # Ruff, Bandit & pytest configuration
 ├── requirements.txt               # Pinned runtime dependencies
 ├── SECURITY.md                    # Security policy & vulnerability reporting
 └── LICENSE                        # MIT License
@@ -103,16 +126,20 @@ python -m app.main
 
 ## Bot Commands & Usage
 
-| Command / Trigger | Description |
-| --- | --- |
-| `/start`, `/help` | Display the full command reference and usage guide |
-| `/summary` | Summarize chat activity over the last 6 hours |
-| `/summary <hours>` | Summarize chat activity over the last `N` hours (e.g. `/summary 4`, `/summary 24`) |
-| `/ask <question>` | Ask Gemini with Google Search grounding (or analyze an attached/replied photo) |
-| `@bot <question>` | Mention the bot in a group to ask a question or summarize (`@bot суммарі 4`) |
-| Reply + `@bot` | Reply to any message or photo with `@bot` to explain or analyze it |
-| `/stats` | Show 24h/total message counts, cached digests, and top-5 active users |
-| `/clear` | Clear stored chat history and digests (restricted to group admins) |
+| Command / Trigger | Module | Description |
+| --- | --- | --- |
+| `/start`, `/modules`, `/settings` | `core` | Open interactive per-chat module settings (admin-only in groups) |
+| `/help` | `core` | Display help tailored to the modules enabled in the current chat |
+| `/clear` | `core` | Clear stored chat history and digests (restricted to group admins) |
+| `/summary [hours]` | `summary` | Summarize chat activity over the last `N` hours (default `6`, up to `168`) |
+| `/tasks [hours]` | `summary` | List confirmed decisions, proposed action items, and open questions |
+| `/ask <question>` | `ask` | Ask Gemini with Google Search grounding (or analyze an attached/replied photo) |
+| `@bot <question>` / Reply + `@bot` | `ask` / `summary` | Mention the bot to ask in multi-turn reply context or summarize (`@bot суммарі 4`) |
+| `/dl <url>` (or bare link) | `media_dl` | Download video from TikTok, Instagram, or YouTube (up to 50 MB) |
+| `/find <query>` | `search` | Search stored chat history with clickable message links |
+| `/stats [period]` | `stats` | Show activity stats, top users, peak Kyiv hour, and most-replied messages (`24h`, `7d`, `all`, or hours) |
+| `/transcribe` | `voice` | Reply to a voice message, audio file, or video note to transcribe it *(disabled by default)* |
+| `/digest [on HH:MM \| off \| status]` | `daily_digest` | Configure automated daily chat digests in Europe/Kyiv time *(disabled by default)* |
 
 ---
 
@@ -138,10 +165,10 @@ python -m app.main
 
 ## Testing & Code Quality
 
-Run the unit test suite:
+Run the automated test suite:
 
 ```bash
-python -m unittest discover -s tests -v
+pytest tests -v
 ```
 
 Run linting and security checks locally:

@@ -10,14 +10,17 @@ The bot follows a layered, modular asynchronous architecture powered by **aiogra
 graph TD
     User([Telegram User]) -->|Message / Command / Ping| Router[Aiogram Router]
     
-    subgraph Handlers
-        Router --> CmdHandler[commands.py]
-        Router --> GroupHandler[group_events.py]
+    subgraph Handlers & Modules
+        Router --> CoreMod[modules/core.py]
+        Router --> FeatureMods[modules: summary, ask, media_dl, search, stats, voice, daily_digest]
+        Router --> GroupHandler[handlers/group_events.py]
+        CoreMod -->|Toggle & BotCommandScopeChat| Registry[modules/registry.py]
     end
     
     subgraph Storage & Context
-        GroupHandler -->|Ingest Message, Quote, Reply| SQLite[(SQLite Database)]
-        CmdHandler -->|Build Context Window| CtxBuilder[context_builder.py]
+        Registry -->|Cache & Persist| SQLite[(SQLite Database)]
+        GroupHandler -->|Log if logging module enabled| SQLite
+        FeatureMods -->|Build Context Window| CtxBuilder[context_builder.py]
         SQLite -->|Hydrate Orphan Parents & Digests| CtxBuilder
     end
     
@@ -56,8 +59,15 @@ graph TD
   - `valid_speakers`: Participants attributed to statements or decisions must exist in the chat window.
   - Fabricated claims, hallucinated participants, or phantom action items are purged before rendering.
 
-### 4. Background Scheduler
-- Runs continuously via an `asyncio.Task` inside the main process without heavy external dependencies like APScheduler.
-- Aggregates unprocessed messages into hourly digests (`ChatDigest`) in batches of 200.
-- Keeps SQLite connections open only during fast fetch and commit operations, leaving the database unlocked during LLM network calls.
-- Prunes expired records based on `RETENTION_DAYS`.
+### 4. Background Schedulers
+- **Hourly Digest & Retention Loop**: Aggregates unprocessed messages into hourly digests (`ChatDigest`) in batches of 200 without holding SQLite locks during LLM calls, and prunes expired records beyond `RETENTION_DAYS`.
+- **Daily Digest Tick**: Checks `ChatSettings.daily_digest_time` every 60 seconds and dispatches scheduled Europe/Kyiv daily summaries for chats with `daily_digest` enabled.
+
+### 5. Modular Registry & Per-Chat Isolation (`app/modules/registry.py`)
+- Stores per-chat feature flags in `ChatSettings` (`enabled_modules`, `daily_digest_time`, `daily_digest_last_sent`) backed by an in-memory cache.
+- Syncs per-chat command menus via `BotCommandScopeChat` when admins toggle modules on `/start`, `/modules`, or `/settings`.
+- Passive logging in `group_events.py` is bypassed automatically if a chat has no logging-dependent module (`summary`, `search`, `stats`, `daily_digest`) enabled.
+
+### 6. Media Downloader (`app/services/media_downloader.py`)
+- Uses `yt-dlp` and `ffmpeg` to download TikTok, Instagram, and YouTube videos either automatically or via `/dl <url>`.
+- Enforces strict domain allowlists, SSRF IP/hostname checks, a 50 MB Telegram file cap, and a per-user cooldown.

@@ -68,7 +68,9 @@ nav:
       - Main & Entrypoint: api/main.md
       - Configuration: api/config.md
       - Database Engine & Models: api/database.md
+      - Feature Modules: api/modules.md
       - Handlers: api/handlers.md
       - Context Builder: api/context_builder.md
       - Gemini & Gemma Client: api/gemini_client.md
+      - Media Downloader: api/media_downloader.md
       - Summary Verifier: api/summary_verifier.md

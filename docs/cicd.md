@@ -37,6 +37,8 @@ flowchart TD
   - Anti-hallucination verification, citation generation, and JSON parsing.
   - Gemini service fallback cascades, 429 quota backoff, and 404 model TTL.
   - Command handlers, rate limits, and administrator permission checks.
+  - Per-chat module isolation, inline toggle callbacks, and `BotCommandScopeChat` syncing.
+  - SSRF domain/IP validation for media URLs, multi-turn reply chains, `/find`, `/stats`, and `/digest` scheduling.
 
 ### 3. `docker-build`
 - Validates that the multi-stage Docker build completes cleanly without errors.
