@@ -13,15 +13,29 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.types import (
     BotCommand,
-    BotCommandScopeDefault,
-    BotCommandScopeAllPrivateChats,
     BotCommandScopeAllGroupChats,
+    BotCommandScopeAllPrivateChats,
+    BotCommandScopeDefault,
 )
 
 from app.config import settings
-from app.database.engine import init_db, engine
-from app.handlers import commands, group_events
-from app.services.gemini_client import run_hourly_digest_and_cleanup_job
+from app.database.engine import engine, init_db
+from app.handlers import group_events
+from app.modules import (
+    ask,
+    core,
+    daily_digest,
+    media_dl,
+    search,
+    stats,
+    summary,
+    voice,
+)
+from app.modules.registry import CORE_COMMANDS
+from app.services.gemini_client import (
+    run_daily_digest_tick,
+    run_hourly_digest_and_cleanup_job,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -42,15 +56,22 @@ async def _hourly_digest_loop() -> None:
         await run_hourly_digest_and_cleanup_job()
 
 
+async def _daily_digest_loop(bot: Bot) -> None:
+    """Built-in asyncio background loop: checks scheduled daily digests every 60 seconds."""
+    logger.info("Daily digest scheduler started (tick every 60s).")
+    while True:
+        await asyncio.sleep(60)
+        try:
+            await run_daily_digest_tick(bot)
+        except Exception as e:
+            logger.exception("Error in daily digest loop: %s", e)
+
+
 async def _setup_bot_commands(bot: Bot) -> None:
-    """Registers bot command list in Telegram UI (for private and group chats)."""
+    """Registers minimal global fallback command list; per-chat BotCommandScopeChat overrides dynamically."""
     bot_commands = [
-        BotCommand(command="start", description="List commands and bot capabilities"),
-        BotCommand(command="help", description="Show bot command help and usage"),
-        BotCommand(command="summary", description="Generate chat summary for N hours (e.g. /summary 4)"),
-        BotCommand(command="ask", description="Web search or AI explanation via Gemini 3"),
-        BotCommand(command="stats", description="Chat message statistics and most active participants"),
-        BotCommand(command="clear", description="Clear stored chat history (admins only)"),
+        BotCommand(command=cmd, description=desc)
+        for cmd, desc in CORE_COMMANDS
     ]
     for scope in (
         BotCommandScopeDefault(),
@@ -70,17 +91,26 @@ async def main() -> None:
     )
     dp = Dispatcher()
 
-    # Register routers (commands and pings first, then background message logger)
-    dp.include_router(commands.router)
+    # Register modular routers in priority order, followed by passive group message logger
+    dp.include_router(core.router)
+    dp.include_router(summary.router)
+    dp.include_router(ask.router)
+    dp.include_router(media_dl.router)
+    dp.include_router(search.router)
+    dp.include_router(stats.router)
+    dp.include_router(voice.router)
+    dp.include_router(daily_digest.router)
     dp.include_router(group_events.router)
 
-    bg_task: asyncio.Task | None = None
+    hourly_task: asyncio.Task | None = None
+    daily_task: asyncio.Task | None = None
 
     try:
         logger.info("Initializing SQLite database...")
         await init_db()
 
-        bg_task = asyncio.create_task(_hourly_digest_loop())
+        hourly_task = asyncio.create_task(_hourly_digest_loop())
+        daily_task = asyncio.create_task(_daily_digest_loop(bot))
 
         await bot.delete_webhook(drop_pending_updates=True)
         await _setup_bot_commands(bot)
@@ -91,10 +121,11 @@ async def main() -> None:
         raise
     finally:
         logger.info("Shutting down services...")
-        if bg_task is not None:
-            bg_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await bg_task
+        for task in (hourly_task, daily_task):
+            if task is not None:
+                task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await task
         await bot.session.close()
         await engine.dispose()
 

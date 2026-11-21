@@ -2,6 +2,7 @@ from datetime import timedelta, timezone, UTC
 import logging
 import re
 import time
+from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo
 from google import genai
 from google.genai import types
@@ -11,6 +12,7 @@ from app.database.engine import async_session_factory
 from app.database.models import ChatLog, User, ChatDigest, utc_now
 from app.services.context_builder import (
     SummaryContextBundle,
+    build_summary_context,
     format_messages_for_digest,
     hydrate_orphan_parents,
 )
@@ -20,6 +22,9 @@ from app.services.summary_verifier import (
     render_summary_text,
     verify_and_prune_summary,
 )
+
+if TYPE_CHECKING:
+    from aiogram import Bot
 
 logger = logging.getLogger(__name__)
 try:
@@ -133,6 +138,49 @@ def strip_markdown(text: str) -> str:
     return text.strip()
 
 
+def _extract_grounding_sources(response, max_sources: int = 3) -> list[tuple[str | None, str]]:
+    """Extracts up to max_sources unique (title, uri) pairs from Gemini Search grounding metadata."""
+    candidates = getattr(response, "candidates", None)
+    if not candidates:
+        return []
+    grounding_metadata = getattr(candidates[0], "grounding_metadata", None)
+    if not grounding_metadata:
+        return []
+    chunks = getattr(grounding_metadata, "grounding_chunks", None)
+    if not chunks:
+        return []
+
+    sources: list[tuple[str | None, str]] = []
+    seen_uris: set[str] = set()
+    for chunk in chunks:
+        web = getattr(chunk, "web", None)
+        if not web:
+            continue
+        uri = (getattr(web, "uri", None) or "").strip()
+        if not uri or uri in seen_uris:
+            continue
+        title = (getattr(web, "title", None) or "").strip() or None
+        seen_uris.add(uri)
+        sources.append((title, uri))
+        if len(sources) >= max_sources:
+            break
+    return sources
+
+
+def _format_grounding_sources(sources: list[tuple[str | None, str]]) -> str:
+    """Formats extracted grounding web sources as a clean plain-text section."""
+    if not sources:
+        return ""
+    lines = ["Джерела:"]
+    for title, uri in sources:
+        if title:
+            clean_title = strip_markdown(title)
+            lines.append(f"• {clean_title} — {uri}")
+        else:
+            lines.append(f"• {uri}")
+    return "\n".join(lines)
+
+
 class GeminiService:
     def __init__(self, api_key: str | None = None) -> None:
         key = api_key or settings.gemini_api_key or "DUMMY_KEY_FOR_INIT"
@@ -166,6 +214,7 @@ class GeminiService:
         response_mime_type: str | None = None,
         response_schema: type | None = None,
         raw_output: bool = False,
+        include_grounding_sources: bool = False,
     ) -> str:
         last_error: Exception | None = None
 
@@ -238,7 +287,13 @@ class GeminiService:
                             raise
 
                     if response.text and response.text.strip():
-                        return response.text.strip() if raw_output else strip_markdown(response.text)
+                        result_text = response.text.strip() if raw_output else strip_markdown(response.text)
+                        if with_search and include_grounding_sources and not raw_output:
+                            sources = _extract_grounding_sources(response, max_sources=3)
+                            sources_block = _format_grounding_sources(sources)
+                            if sources_block:
+                                result_text = f"{result_text}\n\n{sources_block}"
+                        return result_text
 
                     finish_reason = None
                     if getattr(response, "candidates", None):
@@ -310,6 +365,7 @@ class GeminiService:
                 system_instruction=system_instruction,
                 temperature=0.4,
                 use_search=use_search,
+                include_grounding_sources=use_search,
             )
         except Exception as e:
             logger.error("All Gemini API attempts (ask) failed: %s", e)
@@ -319,6 +375,39 @@ class GeminiService:
                     "Зачекайте хвилину або перевірте квоти ключа у Google AI Studio."
                 )
             return "⚠️ Виникла тимчасова помилка при зверненні до Gemini API. Спробуйте пізніше."
+
+    async def transcribe_media(self, media_bytes: bytes, mime_type: str) -> str:
+        """
+        Transcribes voice, audio, or video_note bytes using Gemini multimodal models.
+        Includes a concise 1-2 sentence summary when the transcription is long.
+        """
+        prompt = (
+            "Розшифруй це аудіо або відеоповідомлення максимально точно мовою оригіналу. "
+            "Якщо розшифровка довга (понад 3 речення), наприкінці додай стисле резюме з 1–2 речень "
+            "під заголовком «Коротко:». "
+            "Пиши виключно звичайним чистим текстом БЕЗ Markdown-форматування (без **, *, #, `)."
+        )
+        contents = [
+            prompt,
+            types.Part.from_bytes(data=media_bytes, mime_type=mime_type),
+        ]
+        model_chain = self._build_model_chain(settings.gemini_ask_model, ASK_FALLBACK_MODELS)
+
+        try:
+            return await self._generate_with_fallback(
+                model_chain=model_chain,
+                contents=contents,
+                temperature=0.1,
+                use_search=False,
+            )
+        except Exception as e:
+            logger.error("All Gemini API attempts (transcribe_media) failed: %s", e)
+            if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
+                return (
+                    "⚠️ Тимчасово вичерпано ліміт безкоштовних запитів Gemini API (429 RESOURCE_EXHAUSTED).\n"
+                    "Спробуйте розшифрувати повідомлення трохи пізніше."
+                )
+            return "⚠️ Не вдалося розшифрувати медіа через тимчасову помилку Gemini API. Спробуйте пізніше."
 
     async def _run_self_check_pass(
         self,
@@ -667,9 +756,12 @@ async def process_hourly_digest_for_chat(chat_id: int) -> bool:
 async def run_hourly_digest_and_cleanup_job() -> None:
     """
     Background hourly task:
-    1) Generates hourly digests from unprocessed messages for each chat in isolation.
+    1) Generates hourly digests from unprocessed messages for each chat in isolation
+       (only when logging is enabled for that chat).
     2) Prunes outdated messages, digests (older than RETENTION_DAYS), and orphaned User records.
     """
+    from app.modules.registry import chat_requires_logging
+
     try:
         async with async_session_factory() as session:
             stmt = (
@@ -681,6 +773,8 @@ async def run_hourly_digest_and_cleanup_job() -> None:
 
         for cid in chat_ids:
             try:
+                if not await chat_requires_logging(cid):
+                    continue
                 await process_hourly_digest_for_chat(cid)
             except Exception as chat_err:
                 logger.exception(
@@ -703,3 +797,97 @@ async def run_hourly_digest_and_cleanup_job() -> None:
             await session.commit()
     except Exception as e:
         logger.exception("Error in background hourly digest/cleanup job: %s", e)
+
+
+def _split_digest_chunks(text: str, max_len: int = 4000) -> list[str]:
+    """Splits long daily digest text into Telegram-safe chunks."""
+    if not text:
+        return []
+    if len(text) <= max_len:
+        return [text]
+    chunks: list[str] = []
+    remaining = text.strip()
+    while remaining:
+        if len(remaining) <= max_len:
+            chunks.append(remaining)
+            break
+        split_at = remaining.rfind("\n\n", 0, max_len)
+        if split_at < max_len // 3:
+            split_at = remaining.rfind("\n", 0, max_len)
+        if split_at < max_len // 3:
+            split_at = remaining.rfind(" ", 0, max_len)
+        if split_at <= 0:
+            split_at = max_len
+        chunk = remaining[:split_at].rstrip()
+        if chunk:
+            chunks.append(chunk)
+        remaining = remaining[split_at:].lstrip()
+    return chunks
+
+
+async def run_daily_digest_tick(bot: "Bot") -> None:
+    """
+    Periodic 60-second tick: checks which chats are due for their scheduled daily digest
+    in Europe/Kyiv time, generates a 24h verified summary, sends it, and marks it sent.
+    """
+    from app.modules.registry import (
+        get_chats_due_for_daily_digest,
+        is_module_enabled,
+        mark_daily_digest_sent,
+    )
+
+    now_utc = utc_now()
+    aware_utc = now_utc.replace(tzinfo=UTC) if now_utc.tzinfo is None else now_utc
+    now_kyiv = aware_utc.astimezone(KYIV_TZ)
+    current_hhmm = now_kyiv.strftime("%H:%M")
+    today_str = now_kyiv.strftime("%Y-%m-%d")
+
+    try:
+        due_chats = await get_chats_due_for_daily_digest(current_hhmm, today_str)
+    except Exception as e:
+        logger.exception("Error querying chats due for daily digest: %s", e)
+        return
+
+    if not due_chats:
+        return
+
+    cutoff_utc = now_utc - timedelta(hours=24)
+
+    for cid in due_chats:
+        try:
+            if not await is_module_enabled(cid, "daily_digest"):
+                continue
+
+            async with async_session_factory() as session:
+                bundle = await build_summary_context(session, cid, cutoff_utc, hours=24.0)
+
+            if bundle.message_count == 0 and bundle.digest_count == 0:
+                await mark_daily_digest_sent(cid, today_str)
+                continue
+
+            header_note = None
+            if bundle.was_truncated:
+                header_note = (
+                    f"Враховано останні {bundle.message_count} із "
+                    f"{bundle.total_available_messages} повідомлень."
+                )
+
+            rendered, _ = await gemini_service.generate_verified_summary(
+                bundle=bundle,
+                chat_id=cid,
+                show_citations=getattr(settings, "summary_show_citations", True),
+                header_note=header_note,
+            )
+
+            if rendered and rendered.strip():
+                report = (
+                    f"🗞️ Щоденний дайджест чату за останні 24 год. ({today_str}):\n\n"
+                    f"{strip_markdown(rendered)}"
+                )
+                for chunk in _split_digest_chunks(report, max_len=4000):
+                    await bot.send_message(chat_id=cid, text=chunk)
+
+            await mark_daily_digest_sent(cid, today_str)
+            logger.info("Sent daily digest to chat %s for %s.", cid, today_str)
+        except Exception as chat_err:
+            logger.exception("Failed to send daily digest for chat %s: %s", cid, chat_err)
