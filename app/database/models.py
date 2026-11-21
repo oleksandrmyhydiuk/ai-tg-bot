@@ -86,3 +86,15 @@ class ChatDigest(Base):
     period_end: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     message_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     structured_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class ChatSettings(Base):
+    __tablename__ = "chat_settings"
+
+    chat_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    enabled_modules: Mapped[str] = mapped_column(Text, nullable=False)
+    daily_digest_time: Mapped[str | None] = mapped_column(String(5), nullable=True)
+    daily_digest_last_sent: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=utc_now, onupdate=utc_now
+    )
