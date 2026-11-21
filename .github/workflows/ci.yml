@@ -81,7 +81,12 @@ jobs:
     needs: [lint-and-security, test]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     permissions:
-      contents: write
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -98,15 +103,20 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt mkdocs-material "mkdocstrings[python]"
 
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
       - name: Build documentation in strict mode
         env:
           BOT_TOKEN: "123456:DUMMY_FOR_DOCS"
           GEMINI_API_KEY: "DUMMY_KEY_FOR_DOCS"
         run: mkdocs build --strict
 
-      - name: Deploy documentation to gh-pages branch
-        uses: peaceiris/actions-gh-pages@v4
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./site
-          force_orphan: true
+          path: ./site
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
