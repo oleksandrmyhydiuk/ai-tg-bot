@@ -1,6 +1,22 @@
 import os
 from pathlib import Path
 
+
+def _parse_int_set(raw: str) -> set[int]:
+    result: set[int] = set()
+    if not raw:
+        return result
+    for token in raw.split(","):
+        cleaned = token.strip()
+        if not cleaned:
+            continue
+        try:
+            result.add(int(cleaned))
+        except ValueError:
+            continue
+    return result
+
+
 try:
     from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -17,12 +33,23 @@ try:
         summary_raw_char_limit: int = 60000
         summary_show_citations: bool = True
         summary_enable_self_check: bool = False
+        allowed_chat_ids: str = ""
+        admin_user_ids: str = ""
+        global_rpm_limit: int = 30
 
         model_config = SettingsConfigDict(
             env_file=".env",
             env_file_encoding="utf-8",
             extra="ignore",
         )
+
+        @property
+        def parsed_allowed_chat_ids(self) -> set[int]:
+            return _parse_int_set(self.allowed_chat_ids)
+
+        @property
+        def parsed_admin_user_ids(self) -> set[int]:
+            return _parse_int_set(self.admin_user_ids)
 
     settings = Settings()
 
@@ -55,5 +82,16 @@ except ImportError:
         summary_raw_char_limit: int = int(os.environ.get("SUMMARY_RAW_CHAR_LIMIT", "60000"))
         summary_show_citations: bool = os.environ.get("SUMMARY_SHOW_CITATIONS", "true").lower() == "true"
         summary_enable_self_check: bool = os.environ.get("SUMMARY_ENABLE_SELF_CHECK", "false").lower() == "true"
+        allowed_chat_ids: str = os.environ.get("ALLOWED_CHAT_IDS", "")
+        admin_user_ids: str = os.environ.get("ADMIN_USER_IDS", "")
+        global_rpm_limit: int = int(os.environ.get("GLOBAL_RPM_LIMIT", "30"))
+
+        @property
+        def parsed_allowed_chat_ids(self) -> set[int]:
+            return _parse_int_set(self.allowed_chat_ids)
+
+        @property
+        def parsed_admin_user_ids(self) -> set[int]:
+            return _parse_int_set(self.admin_user_ids)
 
     settings = Settings()

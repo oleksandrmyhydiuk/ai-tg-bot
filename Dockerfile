@@ -36,6 +36,7 @@ WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
+    fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/*
 
 RUN groupadd -g 10001 botgroup && \
@@ -47,5 +48,8 @@ COPY --from=builder /opt/venv /opt/venv
 COPY --chown=botuser:botgroup ./app /app/app
 
 USER botuser
+
+HEALTHCHECK --interval=60s --timeout=10s --start-period=15s --retries=3 \
+    CMD python -c "import os, sys; sys.exit(0 if os.path.exists('/app/app/main.py') else 1)"
 
 CMD ["python", "-m", "app.main"]

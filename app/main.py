@@ -9,23 +9,32 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from aiogram import Bot, Dispatcher
+from collections.abc import Awaitable, Callable
+from typing import Any
+
+from aiogram import BaseMiddleware, Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.types import (
     BotCommand,
     BotCommandScopeAllGroupChats,
     BotCommandScopeAllPrivateChats,
     BotCommandScopeDefault,
+    CallbackQuery,
+    Message,
+    TelegramObject,
 )
 
 from app.config import settings
 from app.database.engine import engine, init_db
 from app.handlers import group_events
 from app.modules import (
+    admin_ops,
     ask,
     core,
     daily_digest,
+    link_tldr,
     media_dl,
+    privacy_export,
     search,
     stats,
     summary,
@@ -84,12 +93,50 @@ async def _setup_bot_commands(bot: Bot) -> None:
             logger.warning("Failed to register command menu (%s): %s", type(scope).__name__, e)
 
 
+class AllowlistMiddleware(BaseMiddleware):
+    """
+    Restricts bot interaction to chats in ALLOWED_CHAT_IDS (plus global ADMIN_USER_IDS).
+    When ALLOWED_CHAT_IDS is empty, all chats are allowed.
+    """
+
+    async def __call__(
+        self,
+        handler: Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]],
+        event: TelegramObject,
+        data: dict[str, Any],
+    ) -> Any:
+        allowed_chats = settings.parsed_allowed_chat_ids
+        if not allowed_chats:
+            return await handler(event, data)
+
+        chat_id: int | None = None
+        user_id: int | None = None
+
+        if isinstance(event, Message):
+            chat_id = event.chat.id if event.chat else None
+            user_id = event.from_user.id if event.from_user else None
+        elif isinstance(event, CallbackQuery):
+            chat_id = event.message.chat.id if (event.message and event.message.chat) else None
+            user_id = event.from_user.id if event.from_user else None
+
+        if (chat_id is not None and chat_id in allowed_chats) or (
+            user_id is not None and user_id in settings.parsed_admin_user_ids
+        ):
+            return await handler(event, data)
+
+        return None
+
+
 async def main() -> None:
     bot = Bot(
         token=settings.bot_token,
         default=DefaultBotProperties(parse_mode=None),
     )
     dp = Dispatcher()
+
+    allowlist_mw = AllowlistMiddleware()
+    dp.message.middleware(allowlist_mw)
+    dp.callback_query.middleware(allowlist_mw)
 
     # Register modular routers in priority order, followed by passive group message logger
     dp.include_router(core.router)
@@ -100,6 +147,9 @@ async def main() -> None:
     dp.include_router(stats.router)
     dp.include_router(voice.router)
     dp.include_router(daily_digest.router)
+    dp.include_router(link_tldr.router)
+    dp.include_router(privacy_export.router)
+    dp.include_router(admin_ops.router)
     dp.include_router(group_events.router)
 
     hourly_task: asyncio.Task | None = None

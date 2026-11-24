@@ -9,8 +9,9 @@ from aiogram.types import (
     InlineKeyboardMarkup,
 )
 from sqlalchemy import or_, select
+from sqlalchemy.dialects.sqlite import insert as sqlite_upsert
 from app.database.engine import async_session_factory
-from app.database.models import ChatSettings, utc_now
+from app.database.models import ChatSettings, User, utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +40,9 @@ MODULE_ORDER: tuple[str, ...] = (
     "stats",
     "voice",
     "daily_digest",
+    "link_tldr",
+    "privacy_export",
+    "admin_ops",
 )
 
 MODULES: dict[str, ModuleSpec] = {
@@ -87,9 +91,12 @@ MODULES: dict[str, ModuleSpec] = {
     ),
     "voice": ModuleSpec(
         id="voice",
-        title="Розшифровка голосових",
-        description="Транскрибація голосових та відеонотаток (/transcribe)",
-        commands=(("transcribe", "Розшифрувати голосове / кружечок"),),
+        title="Голосові та документи",
+        description="Транскрибація голосових/відеонотаток (/transcribe) та аналіз документів (/doc)",
+        commands=(
+            ("transcribe", "Розшифрувати голосове / кружечок"),
+            ("doc", "Проаналізувати PDF/текстовий документ"),
+        ),
         default_enabled=False,
         requires_logging=False,
     ),
@@ -101,6 +108,37 @@ MODULES: dict[str, ModuleSpec] = {
         default_enabled=False,
         requires_logging=True,
     ),
+    "link_tldr": ModuleSpec(
+        id="link_tldr",
+        title="Саммарі посилань",
+        description="Стислий переказ веб-сторінок та YouTube-відео (/tldr)",
+        commands=(("tldr", "Короткий зміст посилання або YouTube"),),
+        default_enabled=True,
+        requires_logging=False,
+    ),
+    "privacy_export": ModuleSpec(
+        id="privacy_export",
+        title="Приватність і експорт",
+        description="Відмова від логування (/optout, /optin) та експорт дайджестів (/export)",
+        commands=(
+            ("optout", "Не зберігати мої повідомлення"),
+            ("optin", "Знову зберігати мої повідомлення"),
+            ("export", "Експорт дайджестів (.md/.txt)"),
+        ),
+        default_enabled=True,
+        requires_logging=False,
+    ),
+    "admin_ops": ModuleSpec(
+        id="admin_ops",
+        title="Моніторинг і квоти",
+        description="Стан бота, БД та статистика моделей ШІ (/health, /quota)",
+        commands=(
+            ("health", "Стан бота та бази даних"),
+            ("quota", "Статистика запитів до моделей ШІ"),
+        ),
+        default_enabled=False,
+        requires_logging=False,
+    ),
 }
 
 DEFAULT_ENABLED_MODULES: frozenset[str] = frozenset(
@@ -108,6 +146,7 @@ DEFAULT_ENABLED_MODULES: frozenset[str] = frozenset(
 )
 
 _modules_cache: dict[int, set[str]] = {}
+_optout_cache: dict[int, bool] = {}
 
 
 def clear_modules_cache(chat_id: int | None = None) -> None:
@@ -116,6 +155,63 @@ def clear_modules_cache(chat_id: int | None = None) -> None:
         _modules_cache.clear()
     else:
         _modules_cache.pop(chat_id, None)
+
+
+def clear_optout_cache(user_id: int | None = None) -> None:
+    """Clears the in-memory per-user opt-out cache (all or a specific user)."""
+    if user_id is None:
+        _optout_cache.clear()
+    else:
+        _optout_cache.pop(user_id, None)
+
+
+async def is_user_opted_out(user_id: int | None) -> bool:
+    """Returns True if the user has opted out of chat message logging."""
+    if user_id is None:
+        return False
+
+    cached = _optout_cache.get(user_id)
+    if cached is not None:
+        return cached
+
+    try:
+        async with async_session_factory() as session:
+            row = await session.get(User, user_id)
+    except Exception as e:
+        logger.warning("Failed to load opt-out state for user %s: %s", user_id, e)
+        return False
+
+    opted_out = bool(row.is_opted_out) if row is not None else False
+    _optout_cache[user_id] = opted_out
+    return opted_out
+
+
+async def set_user_opted_out(user_id: int, opted_out: bool) -> None:
+    """Upserts the User row with the given opt-out preference and updates the in-memory cache."""
+    flag = bool(opted_out)
+    now_utc = utc_now()
+    async with async_session_factory() as session:
+        stmt = (
+            sqlite_upsert(User)
+            .values(
+                user_id=user_id,
+                username=None,
+                full_name=f"User {user_id}",
+                is_opted_out=flag,
+                updated_at=now_utc,
+            )
+            .on_conflict_do_update(
+                index_elements=[User.user_id],
+                set_={
+                    "is_opted_out": flag,
+                    "updated_at": now_utc,
+                },
+            )
+        )
+        await session.execute(stmt)
+        await session.commit()
+
+    _optout_cache[user_id] = flag
 
 
 def _serialize_modules(enabled: set[str] | frozenset[str]) -> str:

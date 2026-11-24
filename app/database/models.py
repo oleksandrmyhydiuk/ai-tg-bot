@@ -28,6 +28,9 @@ class User(Base):
     user_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     username: Mapped[str | None] = mapped_column(String(64), nullable=True)
     full_name: Mapped[str] = mapped_column(String(128))
+    is_opted_out: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=sql_text("0")
+    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=utc_now, onupdate=utc_now
     )

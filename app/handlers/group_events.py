@@ -4,7 +4,7 @@ from aiogram.types import Message
 from sqlalchemy.dialects.sqlite import insert as sqlite_upsert
 from app.database.engine import async_session_factory
 from app.database.models import User, ChatLog, utc_now
-from app.modules.registry import chat_requires_logging
+from app.modules.registry import chat_requires_logging, is_user_opted_out
 
 logger = logging.getLogger(__name__)
 router = Router(name="group_logger_router")
@@ -35,7 +35,14 @@ _SKIPPED_COMMANDS = (
     "/download",
     "/find",
     "/transcribe",
+    "/doc",
     "/digest",
+    "/tldr",
+    "/optout",
+    "/optin",
+    "/export",
+    "/health",
+    "/quota",
 )
 
 
@@ -343,6 +350,8 @@ async def log_text_message(
     """Asynchronously saves message text, media fallback, replies, quotes, and metadata to DB."""
     if message is None or getattr(message, "chat", None) is None:
         return
+    if message.from_user and not message.sender_chat and await is_user_opted_out(message.from_user.id):
+        return
     if not await chat_requires_logging(message.chat.id):
         return
     await _upsert_message_record(message, custom_text=custom_text, is_edit=is_edit)
@@ -352,6 +361,8 @@ async def log_text_message(
 async def log_edited_message(message: Message) -> None:
     """Updates text and metadata of edited message without resetting is_processed flag."""
     if message is None or getattr(message, "chat", None) is None:
+        return
+    if message.from_user and not message.sender_chat and await is_user_opted_out(message.from_user.id):
         return
     if not await chat_requires_logging(message.chat.id):
         return

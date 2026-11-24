@@ -1,19 +1,26 @@
 from __future__ import annotations
 
+import asyncio
 from collections import Counter
 from datetime import timedelta, UTC
+from io import BytesIO
 import logging
 import re
 
-from aiogram import Router
+from aiogram import Bot, Router
 from aiogram.filters import Command, CommandObject
-from aiogram.types import Message
+from aiogram.types import BufferedInputFile, Message
 from sqlalchemy import func, select
 
 from app.database.engine import async_session_factory
 from app.database.models import ChatDigest, ChatLog, User, utc_now
 from app.modules.registry import is_module_enabled
 from app.services.context_builder import KYIV_TZ
+from app.services.stats_renderer import (
+    ParticipantStat,
+    StatsCardData,
+    render_stats_leaderboard,
+)
 from app.services.summary_verifier import format_message_link
 
 logger = logging.getLogger(__name__)
@@ -21,6 +28,9 @@ router = Router(name="stats")
 
 DEFAULT_STATS_HOURS = 24
 MAX_STATS_HOURS = 720  # up to 30 days
+TOP_PARTICIPANTS_LIMIT = 8
+AVATAR_FETCH_TIMEOUT_SECONDS = 3.0
+MAX_CAPTION_LEN = 1024
 
 
 async def _reply_safely(message: Message, text: str) -> Message:
@@ -67,6 +77,57 @@ def _truncate_snippet(text: str | None, max_len: int = 80) -> str:
     return clean[: max_len - 3].rstrip() + "..."
 
 
+async def _fetch_user_avatar(bot: Bot | None, user_id: int) -> bytes | None:
+    """Safely fetches a user's smallest profile photo bytes with a short timeout."""
+    if bot is None or not user_id:
+        return None
+    try:
+        photos_result = await asyncio.wait_for(
+            bot.get_user_profile_photos(user_id, limit=1),
+            timeout=AVATAR_FETCH_TIMEOUT_SECONDS,
+        )
+        photos = getattr(photos_result, "photos", None)
+        if not photos or not photos[0]:
+            return None
+        smallest_photo = photos[0][0]
+        file_id = getattr(smallest_photo, "file_id", None)
+        if not file_id:
+            return None
+
+        buf = BytesIO()
+        downloaded = await asyncio.wait_for(
+            bot.download(file_id, destination=buf),
+            timeout=AVATAR_FETCH_TIMEOUT_SECONDS,
+        )
+        data = buf.getvalue()
+        if not data and isinstance(downloaded, BytesIO):
+            data = downloaded.getvalue()
+        return data or None
+    except Exception as exc:
+        logger.debug("Could not fetch avatar for user %s: %s", user_id, exc)
+        return None
+
+
+def _build_compact_caption(
+    *,
+    period_label: str,
+    msgs_in_period: int,
+    total_msgs: int,
+    total_digests: int,
+    peak_hour_text: str,
+    replied_section: str,
+) -> str:
+    caption = (
+        f"📊 Статистика чату за останні {period_label}\n"
+        f"• Повідомлень: {msgs_in_period} | У базі: {total_msgs} | Дайджестів: {total_digests}\n"
+        f"• Пік активності: {peak_hour_text}"
+        f"{replied_section}"
+    )
+    if len(caption) > MAX_CAPTION_LEN:
+        caption = caption[: MAX_CAPTION_LEN - 3].rstrip() + "..."
+    return caption
+
+
 @router.message(Command("stats", ignore_case=True))
 async def cmd_stats(message: Message, command: CommandObject) -> None:
     """Displays enhanced chat statistics for 24h, 7d, or custom hours (/stats [24h|7d])."""
@@ -110,6 +171,7 @@ async def cmd_stats(message: Message, command: CommandObject) -> None:
 
             top_users_stmt = (
                 select(
+                    User.user_id,
                     User.full_name,
                     User.username,
                     func.count(ChatLog.message_id).label("msg_count"),
@@ -122,7 +184,7 @@ async def cmd_stats(message: Message, command: CommandObject) -> None:
                 )
                 .group_by(User.user_id)
                 .order_by(func.count(ChatLog.message_id).desc())
-                .limit(5)
+                .limit(TOP_PARTICIPANTS_LIMIT)
             )
             top_users = (await session.execute(top_users_stmt)).all()
 
@@ -175,6 +237,7 @@ async def cmd_stats(message: Message, command: CommandObject) -> None:
 
     # Peak activity hour in Europe/Kyiv
     peak_hour_text = "немає даних"
+    peak_hour_card_label: str | None = None
     if timestamps:
         hour_counts: Counter[int] = Counter()
         for dt in timestamps:
@@ -187,6 +250,7 @@ async def cmd_stats(message: Message, command: CommandObject) -> None:
             peak_hour, peak_cnt = hour_counts.most_common(1)[0]
             next_hour = (peak_hour + 1) % 24
             peak_hour_text = f"{peak_hour:02d}:00–{next_hour:02d}:00 Київ ({peak_cnt} повід.)"
+            peak_hour_card_label = f"{peak_hour:02d}:00–{next_hour:02d}:00 ({peak_cnt})"
 
     if top_users:
         top_users_lines = [
@@ -229,7 +293,65 @@ async def cmd_stats(message: Message, command: CommandObject) -> None:
         f"• Усього збережено в базі: {total_msgs}\n"
         f"• Погодинних дайджестів у кеші: {total_digests}\n"
         f"• Пік активності: {peak_hour_text}\n\n"
-        f"🏆 Топ-5 активних учасників:\n{top_users_text}"
+        f"🏆 Топ-{len(top_users) if top_users else 8} активних учасників:\n{top_users_text}"
         f"{replied_section}"
     )
+
+    if top_users and callable(getattr(message, "reply_photo", None)):
+        try:
+            bot = getattr(message, "bot", None)
+            if bot is not None:
+                avatars = list(
+                    await asyncio.gather(
+                        *(_fetch_user_avatar(bot, int(row.user_id)) for row in top_users),
+                    )
+                )
+            else:
+                avatars = [None] * len(top_users)
+
+            participants = [
+                ParticipantStat(
+                    user_id=int(row.user_id),
+                    display_name=(row.full_name or "").strip()
+                    or (f"@{row.username}" if row.username else f"User#{row.user_id}"),
+                    message_count=int(row.msg_count),
+                    avatar_bytes=avatar_bytes,
+                )
+                for row, avatar_bytes in zip(top_users, avatars, strict=False)
+            ]
+
+            chat_title = (
+                getattr(message.chat, "title", None)
+                or (f"@{message.chat.username}" if getattr(message.chat, "username", None) else None)
+                or "Чат"
+            )
+            card_data = StatsCardData(
+                chat_title=chat_title,
+                period_label=period_label,
+                total_period_messages=int(msgs_in_period),
+                total_retained_messages=int(total_msgs),
+                digest_count=int(total_digests),
+                peak_hour_label=peak_hour_card_label,
+                participants=participants,
+            )
+
+            png_bytes = await asyncio.to_thread(render_stats_leaderboard, card_data)
+            compact_caption = _build_compact_caption(
+                period_label=period_label,
+                msgs_in_period=int(msgs_in_period),
+                total_msgs=int(total_msgs),
+                total_digests=int(total_digests),
+                peak_hour_text=peak_hour_text,
+                replied_section=replied_section,
+            )
+            photo_file = BufferedInputFile(png_bytes, filename="chat_stats.png")
+            await message.reply_photo(photo_file, caption=compact_caption)
+            return
+        except Exception as exc:
+            logger.warning(
+                "Visual stats card unavailable for chat %s, falling back to text: %s",
+                chat_id,
+                exc,
+            )
+
     await _reply_safely(message, stats_text)

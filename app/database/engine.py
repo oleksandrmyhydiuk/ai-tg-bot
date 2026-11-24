@@ -129,6 +129,15 @@ def _migrate_sqlite_schema(sync_conn: Connection) -> None:
     if "sqlite" not in RESOLVED_DB_URL:
         return
 
+    users_info = sync_conn.execute(text("PRAGMA table_info(users)")).fetchall()
+    if users_info:
+        existing_user_cols = {row[1] for row in users_info}
+        if "is_opted_out" not in existing_user_cols:
+            logger.info("DB Migration: adding column users.is_opted_out (BOOLEAN DEFAULT 0)")
+            sync_conn.execute(
+                text("ALTER TABLE users ADD COLUMN is_opted_out BOOLEAN DEFAULT 0")
+            )
+
     log_info = sync_conn.execute(text("PRAGMA table_info(chat_logs)")).fetchall()
     if log_info:
         existing_log_cols = {row[1] for row in log_info}

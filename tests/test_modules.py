@@ -237,7 +237,7 @@ class TestPerChatIsolationAndCoreUI(unittest.TestCase):
             cmds_b = [c.command for c in registry.build_bot_commands_for_modules(enabled_b)]
             core_names = [c for c, _ in registry.CORE_COMMANDS]
             self.assertEqual(cmds_a, core_names + ["summary", "tasks", "dl"])
-            self.assertEqual(cmds_b, core_names + ["ask", "transcribe"])
+            self.assertEqual(cmds_b, core_names + ["ask", "transcribe", "doc"])
 
             # Verify sync_chat_commands passes BotCommandScopeChat(chat_id=...)
             bot = SimpleNamespace(set_my_commands=_AsyncCallableMock())
@@ -251,7 +251,7 @@ class TestPerChatIsolationAndCoreUI(unittest.TestCase):
             self.assertEqual(call_a_kwargs["scope"].chat_id, chat_a)
 
             call_b_args, call_b_kwargs = bot.set_my_commands.calls[1]
-            self.assertEqual([c.command for c in call_b_args[0]], core_names + ["ask", "transcribe"])
+            self.assertEqual([c.command for c in call_b_args[0]], core_names + ["ask", "transcribe", "doc"])
             self.assertIsInstance(call_b_kwargs["scope"], BotCommandScopeChat)
             self.assertEqual(call_b_kwargs["scope"].chat_id, chat_b)
 
